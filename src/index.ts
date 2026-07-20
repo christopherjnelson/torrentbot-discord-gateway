@@ -1,4 +1,5 @@
 import { errorResponse } from "./discord/responses";
+import { handleApiRequest } from "./routes/api";
 import { handleDiscordInteractions } from "./routes/discord";
 
 /**
@@ -26,6 +27,10 @@ const handler: ExportedHandler<Env> = {
 			url.pathname === "/discord/interactions"
 		) {
 			return handleDiscordInteractions(request, env, ctx);
+		}
+
+		if (url.pathname.startsWith("/api/")) {
+			return handleApiRequest(request, env, url);
 		}
 
 		return errorResponse("Not found", 404);
