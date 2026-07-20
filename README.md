@@ -411,6 +411,17 @@ Not yet verified (needs a real TorBox API key):
   `download_finished: true` in practice; per the docs the bot relies only on
   `download_finished`.
 
+## Agent skills
+
+Before modifying the TorBox integration (`src/services/torbox.ts`,
+`src/types/torbox.ts`, or any caller in `src/commands/` / `src/routes/api.ts`),
+read the tracked agent skill at [`.agents/skills/torbox-api/SKILL.md`](.agents/skills/torbox-api/SKILL.md).
+It documents the verified endpoint contracts, the `download_finished`
+readiness rule, `DUPLICATE_ITEM`/`ITEM_NOT_FOUND` handling, the cache-check
+batch request, and the download-link workflow, plus the security rules for
+credentials and download URLs. Update the skill in the same change when
+verified TorBox API behavior changes.
+
 ## Internal API usage (n8n or other automation)
 
 All routes require `Authorization: Bearer $INTERNAL_API_TOKEN`.
