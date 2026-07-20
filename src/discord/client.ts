@@ -1,4 +1,6 @@
 import { fetchText } from "../utils/http";
+import { UpstreamParseError } from "../utils/errors";
+import { FLAG_EPHEMERAL } from "./responses";
 
 /**
  * Minimal Discord REST client for interaction follow-ups.
@@ -99,22 +101,12 @@ function parseDiscordError(body: string): {
 	return { code, message, fieldErrors };
 }
 
-/**
- * Edit the original response to an interaction (used after a deferred ACK).
- * PATCH /webhooks/{application.id}/{interaction.token}/messages/@original
- *
- * Throws a `DiscordApiError` carrying only sanitized diagnostic fields.
- */
-export async function editOriginalResponse(
-	applicationId: string,
-	interactionToken: string,
+/** Shared PATCH for interaction webhook messages (original or followup). */
+async function patchWebhookMessage(
+	url: string,
 	message: FollowupMessage,
 	timeoutMs?: number,
 ): Promise<void> {
-	const url =
-		`${DISCORD_API_BASE}/webhooks/${applicationId}` +
-		`/${interactionToken}/messages/@original`;
-
 	const body: Record<string, unknown> = {
 		content: message.content,
 		allowed_mentions: { parse: [] },
@@ -140,4 +132,100 @@ export async function editOriginalResponse(
 			fieldErrors,
 		});
 	}
+}
+
+/**
+ * Edit the original response to an interaction (used after a deferred ACK).
+ * PATCH /webhooks/{application.id}/{interaction.token}/messages/@original
+ *
+ * Throws a `DiscordApiError` carrying only sanitized diagnostic fields.
+ */
+export async function editOriginalResponse(
+	applicationId: string,
+	interactionToken: string,
+	message: FollowupMessage,
+	timeoutMs?: number,
+): Promise<void> {
+	const url =
+		`${DISCORD_API_BASE}/webhooks/${applicationId}` +
+		`/${interactionToken}/messages/@original`;
+	await patchWebhookMessage(url, message, timeoutMs);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Create an ephemeral followup message for an interaction.
+ * POST /webhooks/{application.id}/{interaction.token}
+ *
+ * Returns the created message id so it can be edited later via
+ * `editFollowupMessage`. Only message content is sent; the EPHEMERAL flag
+ * (1 << 6) keeps the message visible to the invoker only.
+ */
+export async function createFollowupMessage(
+	applicationId: string,
+	interactionToken: string,
+	message: FollowupMessage,
+	timeoutMs?: number,
+): Promise<string> {
+	const url =
+		`${DISCORD_API_BASE}/webhooks/${applicationId}` +
+		`/${interactionToken}`;
+
+	const { status, body } = await fetchText(url, {
+		service: "discord",
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({
+			content: message.content,
+			allowed_mentions: { parse: [] },
+			flags: FLAG_EPHEMERAL,
+		}),
+		timeoutMs,
+	});
+
+	if (status < 200 || status >= 300) {
+		const { code, message, fieldErrors } = parseDiscordError(body);
+		throw new DiscordApiError({
+			status,
+			code,
+			message,
+			fieldErrors,
+		});
+	}
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(body);
+	} catch {
+		throw new UpstreamParseError("discord", "returned invalid JSON");
+	}
+	const id =
+		isRecord(parsed) && typeof parsed.id === "string" ? parsed.id : undefined;
+	if (!id) {
+		throw new UpstreamParseError(
+			"discord",
+			"returned a followup message without an id",
+		);
+	}
+	return id;
+}
+
+/**
+ * Edit a previously created followup message.
+ * PATCH /webhooks/{application.id}/{interaction.token}/messages/{message.id}
+ */
+export async function editFollowupMessage(
+	applicationId: string,
+	interactionToken: string,
+	messageId: string,
+	message: FollowupMessage,
+	timeoutMs?: number,
+): Promise<void> {
+	const url =
+		`${DISCORD_API_BASE}/webhooks/${applicationId}` +
+		`/${interactionToken}/messages/${messageId}`;
+	await patchWebhookMessage(url, message, timeoutMs);
 }

@@ -186,12 +186,12 @@ describe("Discord edit error diagnostics", () => {
 			TEST_SIGNING_SECRET,
 		);
 
-		// Failing edit: 50035 invalid form body with the long custom_id.
+		// Failing followup create: 50035 invalid form body.
 		fetchMock
 			.get("https://discord.com")
 			.intercept({
-				path: (p) => p.includes("/webhooks/") && p.endsWith("/messages/@original"),
-				method: "PATCH",
+				path: (p) => /^\/api\/v10\/webhooks\/[^/]+\/[^/]+$/.test(p),
+				method: "POST",
 			})
 			.reply(400, JSON.stringify({
 				code: 50035,
@@ -214,6 +214,8 @@ describe("Discord edit error diagnostics", () => {
 		);
 
 		expect(response.status).toBe(200);
+		// The menu is still removed via the UPDATE_MESSAGE ack.
+		expect((await response.json() as any).type).toBe(7);
 		await waitOnExecutionContext(ctx);
 
 		const logged = JSON.stringify(warnSpy.mock.calls);

@@ -56,9 +56,96 @@ original response through the follow-up webhook
 When `/search` returns results with valid info hashes, it also includes a
 Discord select menu component. The original requester can use this menu to
 submit a selected result to TorBox without manually copying the magnet URI.
-The menu is disabled after a successful submission. Component interactions are
-signed with HMAC-SHA-256 to prevent tampering and bind the selection to the
-original requester.
+
+When an allowlisted user selects a result, the bot:
+
+1. **Validates** the signed component payload, requester binding, and the
+   `TORBOX_ALLOWED_USER_IDS` allowlist. Failures answer ephemerally and leave
+   the search menu untouched.
+2. **Acknowledges** the interaction with `UPDATE_MESSAGE` (Discord callback
+   type 7), which removes the select menu from the search results message
+   without showing a loading state. The TorBox work runs in the background via
+   `ctx.waitUntil`.
+3. **Submits** the magnet to TorBox. If TorBox reports the item already
+   exists (`DUPLICATE_ITEM`), the bot locates the existing torrent by its
+   info hash (the stable documented identifier, never by title) and
+   continues.
+4. **Polls** TorBox for readiness in a short bounded window (see
+   *TorBox polling* below).
+5. **Reports** the outcome in an ephemeral followup message.
+
+Component interactions are signed with HMAC-SHA-256 to prevent tampering and
+bind the selection to the original requester.
+
+### TorBox download flow
+
+A selection produces one of these ephemeral responses:
+
+**Cached or quickly ready**
+
+```
+Added to TorBox.
+
+**Backrooms (2026) [1080p]**
+Ready to download:
+[Download file](https://…) — `Backrooms.2026.1080p.mkv` (1.4 GiB)
+```
+
+For a multi-file torrent the bot returns a whole-torrent zip archive link
+instead, since TorBox's `zip_link` requestdl option is officially documented
+and avoids guessing at individual files:
+
+```
+Added to TorBox.
+
+**Some.Season.Pack.2026**
+Ready to download (12 files):
+[Download archive (zip)](https://…)
+```
+
+**Still processing** (torrent added but not ready within the bounded window)
+
+```
+Added to TorBox.
+
+**Backrooms (2026) [1080p]**
+TorBox is still processing this torrent (ID `42`). Use `/status` to check it later.
+```
+
+**Failure** (added but a link could not be generated yet)
+
+```
+The torrent was added, but TorrentBot could not generate a download link yet.
+Use `/status` to check it later.
+```
+
+All of these responses are **ephemeral** — the download link is never placed in
+the public search results message and is only ever shown to the requester. The
+generated TorBox download URL is a temporary CDN link (valid ~3 hours for
+starting a download) and is never logged.
+
+### TorBox polling
+
+After submitting a torrent the bot polls TorBox's `GET /torrents/mylist?id=…`
+endpoint with `bypass_cache=true` (the official docs note the list is otherwise
+cached for 600 seconds). Polling is strictly bounded:
+
+- the first poll runs immediately after a successful submission;
+- subsequent polls run every `TORBOX_POLL_INTERVAL_MS` (default `2500` ms);
+- at most `TORBOX_POLL_MAX_ATTEMPTS` polls are performed (default `7`),
+  giving a window of roughly 15–20 seconds;
+- polling stops as soon as the torrent is ready, the budget is exhausted, the
+  torrent disappears after being seen, or an upstream error occurs.
+
+Readiness is determined by TorBox's `download_finished` field. The official
+docs explicitly state that `download_state: "completed"` must *not* be used for
+download-completion status, so the bot does not rely on it.
+
+This is a **best-effort, bounded** check only. The bot does not persist any
+state and does **not** notify the user later if the torrent finishes after the
+window. Use `/status` as the fallback for items still processing. Persistent
+background monitoring (KV, D1, Durable Objects, Queues, Workflows, or cron) is
+deliberately out of scope for this task.
 
 ## Setup
 
@@ -121,6 +208,8 @@ Fill in `.dev.vars` (never commit it — it is git-ignored):
 | `PROWLARR_URL` | var | Prowlarr base URL (set in `wrangler.jsonc`; `.dev.vars` overrides locally) |
 | `TORBOX_ALLOWED_USER_IDS` | var | Comma-separated Discord user IDs allowed to run `/add` and `/status` |
 | `UPSTREAM_TIMEOUT_MS` | var | Optional upstream timeout override (default `10000`) |
+| `TORBOX_POLL_INTERVAL_MS` | var | Optional delay between TorBox readiness polls after a selection (default `2500`, range 250–10000) |
+| `TORBOX_POLL_MAX_ATTEMPTS` | var | Optional cap on TorBox readiness polls after a selection (default `7`, range 1–20) |
 
 ### 5. Cloudflare production configuration
 
@@ -142,8 +231,9 @@ openssl rand -hex 32
 ```
 
 Non-secret vars live in `wrangler.jsonc` (`PROWLARR_URL`,
-`TORBOX_ALLOWED_USER_IDS`, `UPSTREAM_TIMEOUT_MS`) and can be edited there or
-in the Cloudflare dashboard.
+`TORBOX_ALLOWED_USER_IDS`, `UPSTREAM_TIMEOUT_MS`, `TORBOX_POLL_INTERVAL_MS`,
+`TORBOX_POLL_MAX_ATTEMPTS`) and can be edited there or in the Cloudflare
+dashboard.
 
 ### 6. Register the Discord commands
 
@@ -227,15 +317,20 @@ authentication.
   `TORBOX_ALLOWED_USER_IDS`. The signing secret is
   `COMPONENT_SIGNING_SECRET`. Payloads expire after 15 minutes.
 - **No secret logging**: interaction tokens, bot tokens, API keys,
-  authorization headers, full magnet URIs, and raw interaction payloads are
-  never logged. Upstream error types never carry request URLs (which can
-  contain credentials).
+  authorization headers, full magnet URIs, generated download URLs, and raw
+  interaction payloads are never logged. Upstream error types never carry
+  request URLs (which can contain credentials).
 - **Prowlarr proxy URLs**: Prowlarr rewrites `downloadUrl`/`magnetUrl` in
   search responses into proxy URLs that embed the Prowlarr API key
   (`/{indexerId}/download?apikey=…`). The adapter never propagates them:
   magnets are synthesized from the info hash (or passed through only when
   already a raw `magnet:` URI), and result links come from the un-proxied
   `infoUrl` field.
+- **TorBox download links**: only `https:` URLs returned by TorBox are
+  accepted; the documented permalink form (which embeds the TorBox API key
+  in the URL) is never used. Links are delivered only in ephemeral
+  followup messages to the requester and never appear in the public search
+  results message.
 - **Mentions**: all bot messages set `allowed_mentions: { parse: [] }`;
   titles are sanitized and length-capped (Discord's 2000-char limit).
 - **Privacy**: Discord output shows magnet/hash *availability markers* only.
@@ -263,14 +358,31 @@ Verified (2026-07-19):
   `size`, `seeders`, `leechers`, `categories`, `indexer`, `infoUrl`,
   `infoHash`, `publishDate`, and `magnetUrl` are all optional.
 - TorBox main API (`https://api.torbox.app/v1/api`): `POST
-  /torrents/createtorrent` (multipart `magnet` field, Bearer auth) and `GET
-  /torrents/mylist` shapes — from the official TorBox API documentation,
-  including the `{success, error, detail, data}` envelope.
+  /torrents/createtorrent` (multipart `magnet` field, Bearer auth),
+  `GET /torrents/mylist` (params `id`, `offset`, `limit`, `bypass_cache`;
+  with `id` the docs state the response "will return an object rather than
+  list", which the bot tolerates either shape; `bypass_cache` bypasses the
+  600-second server-side list cache), and `GET /torrents/requestdl` (params
+  `token` (API key), `torrent_id`, `file_id` (optional if `zip_link`),
+  `zip_link` ("required if no file_id; takes precedence over file_id"),
+  `user_ip`, `redirect`, `append_name`; `data` is a temporary CDN URL string)
+  — from the official TorBox API documentation (Postman collection at
+  api-docs.torbox.app and the live OpenAPI spec at api.torbox.app/openapi.json),
+  including the `{success, error, detail, data}` envelope, the documented
+  download states, and `download_finished` as the supported completion signal.
+- Discord message-component interactions: `UPDATE_MESSAGE` (callback type 7)
+  edits the message the component was attached to (used to remove the search
+  select menu), and interaction followups (`POST /webhooks/{app}/{token}` with
+  the `EPHEMERAL` flag) deliver the final ephemeral result — from the official
+  Discord developer documentation.
 
 Not yet verified (needs a real TorBox API key):
 
 - Whether TorBox `mylist` `progress` is 0–1 or 0–100; the bot normalizes
   both (`<= 1` is treated as a fraction).
+- Whether `download_state: "completed"` truly differs from
+  `download_finished: true` in practice; per the docs the bot relies only on
+  `download_finished`.
 
 ## Internal API usage (n8n or other automation)
 
@@ -328,10 +440,19 @@ responses never include download URLs, file lists, or server paths.
 
 ## Current limitations
 
-- **Task 1 (this task)**: The select menu in `/search` results only submits
-  torrents to TorBox. Polling for download completion and generating download
-  links are deferred to Task 2.
-- The bot does not currently monitor download progress or notify when downloads
-  complete.
-- Download links are not yet generated. Users must check their TorBox account
-  for completed downloads.
+- **Bounded readiness check only**: the selection flow polls TorBox for at
+  most ~15–20 seconds. If a torrent is not ready within that window the bot
+  tells the user it is still processing and stops — it does not persist any
+  state and does **not** notify the user later when the torrent finishes.
+  Use `/status` to check items still processing. Persistent background
+  monitoring (KV, D1, Durable Objects, Queues, Workflows, cron, or external
+  databases/n8n) is intentionally out of scope.
+- **Multi-file torrents**: a multi-file torrent always returns a whole-torrent
+  zip archive link. Individual-file selection within a multi-file torrent
+  (largest non-sample media file, sample/NFO/subtitle exclusion) is not
+  implemented, because the documented TorBox `zip_link` archive option is
+  available and avoids guessing at individual files.
+- **Temporary links**: generated TorBox download URLs are temporary CDN links
+  (~3 hours for starting a download), as documented. They are not persisted
+  by the bot.
+- The bot does not monitor download progress across requests.

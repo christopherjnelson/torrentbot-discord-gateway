@@ -112,7 +112,12 @@ export async function dispatchInteraction(
 
 export interface PatchedMessage {
 	path: string;
-	body: { content?: string; allowed_mentions?: { parse?: string[] } };
+	body: {
+		content?: string;
+		components?: object[];
+		flags?: number;
+		allowed_mentions?: { parse?: string[] };
+	};
 }
 
 /** Intercept the follow-up PATCH that edits the original response. */
@@ -124,6 +129,54 @@ export function interceptOriginalResponseEdit(): { captured: PatchedMessage[] } 
 			path: (path) =>
 				path.includes("/api/v10/webhooks/") &&
 				path.endsWith("/messages/@original"),
+			method: "PATCH",
+		})
+		.reply((opts) => {
+			captured.push({
+				path: opts.path,
+				body: JSON.parse(String(opts.body)) as PatchedMessage["body"],
+			});
+			return { statusCode: 200, data: "{}" };
+		});
+	return { captured };
+}
+
+export const TEST_FOLLOWUP_MESSAGE_ID = "followup-msg-1";
+
+/** Intercept the POST that creates an interaction followup message. */
+export function interceptFollowupCreate(): { captured: PatchedMessage[] } {
+	const captured: PatchedMessage[] = [];
+	fetchMock
+		.get("https://discord.com")
+		.intercept({
+			path: (path) =>
+				/^\/api\/v10\/webhooks\/[^/]+\/[^/]+$/.test(path),
+			method: "POST",
+		})
+		.reply((opts) => {
+			captured.push({
+				path: opts.path,
+				body: JSON.parse(String(opts.body)) as PatchedMessage["body"],
+			});
+			return {
+				statusCode: 200,
+				data: JSON.stringify({ id: TEST_FOLLOWUP_MESSAGE_ID }),
+			};
+		});
+	return { captured };
+}
+
+/** Intercept the PATCH that edits a followup message. */
+export function interceptFollowupEdit(
+	messageId: string = TEST_FOLLOWUP_MESSAGE_ID,
+): { captured: PatchedMessage[] } {
+	const captured: PatchedMessage[] = [];
+	fetchMock
+		.get("https://discord.com")
+		.intercept({
+			path: (path) =>
+				path.includes("/api/v10/webhooks/") &&
+				path.endsWith(`/messages/${messageId}`),
 			method: "PATCH",
 		})
 		.reply((opts) => {

@@ -22,11 +22,11 @@ import { handleComponentInteraction } from "../commands/component";
 /**
  * Route a verified Discord interaction to its handler.
  */
-export function routeInteraction(
+export async function routeInteraction(
 	interaction: DiscordInteraction,
 	env: Env,
 	ctx: ExecutionContext,
-): Response {
+): Promise<Response> {
 	if (interaction.type === INTERACTION_PING) {
 		return pongResponse();
 	}

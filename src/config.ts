@@ -24,9 +24,15 @@ export interface AppConfig {
 	upstreamTimeoutMs: number;
 	/** Secret used to sign and verify Discord component payloads. */
 	componentSigningSecret: string | undefined;
+	/** Delay between TorBox readiness polls after adding a torrent. */
+	torboxPollIntervalMs: number;
+	/** Maximum number of TorBox readiness polls after adding a torrent. */
+	torboxPollMaxAttempts: number;
 }
 
 const DEFAULT_UPSTREAM_TIMEOUT_MS = 10_000;
+const DEFAULT_TORBOX_POLL_INTERVAL_MS = 2_500;
+const DEFAULT_TORBOX_POLL_MAX_ATTEMPTS = 7;
 
 function readString(value: unknown): string | undefined {
 	if (typeof value !== "string") {
@@ -44,6 +50,23 @@ function readTimeoutMs(value: unknown): number {
 	return parsed;
 }
 
+/**
+ * Read an optional positive-integer env var within [min, max], falling back
+ * to `fallback` when missing or invalid.
+ */
+function readBoundedInt(
+	value: unknown,
+	min: number,
+	max: number,
+	fallback: number,
+): number {
+	const parsed = Number.parseInt(readString(value) ?? "", 10);
+	if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+		return fallback;
+	}
+	return parsed;
+}
+
 export function getConfig(env: Env): AppConfig {
 	return {
 		discordPublicKey: readString(env.DISCORD_PUBLIC_KEY),
@@ -57,6 +80,18 @@ export function getConfig(env: Env): AppConfig {
 			.filter((id) => id.length > 0),
 		upstreamTimeoutMs: readTimeoutMs(env.UPSTREAM_TIMEOUT_MS),
 		componentSigningSecret: readString(env.COMPONENT_SIGNING_SECRET),
+		torboxPollIntervalMs: readBoundedInt(
+			env.TORBOX_POLL_INTERVAL_MS,
+			250,
+			10_000,
+			DEFAULT_TORBOX_POLL_INTERVAL_MS,
+		),
+		torboxPollMaxAttempts: readBoundedInt(
+			env.TORBOX_POLL_MAX_ATTEMPTS,
+			1,
+			20,
+			DEFAULT_TORBOX_POLL_MAX_ATTEMPTS,
+		),
 	};
 }
 

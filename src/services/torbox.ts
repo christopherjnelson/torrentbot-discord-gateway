@@ -1,5 +1,6 @@
 import type {
 	TorboxCreateTorrentData,
+	TorboxFile,
 	TorboxResponse,
 	TorboxTorrent,
 } from "../types/torbox";
@@ -16,9 +17,12 @@ import { sanitizeInline } from "../utils/format";
  * Endpoint shapes verified against official docs (see types/torbox.ts).
  *
  * Security rules:
- * - The API key travels only in the Authorization header; it is never
- *   logged and never embedded in URLs (error types never carry URLs).
+ * - The API key travels only in the Authorization header and, for the
+ *   requestdl endpoint (which documents a required `token` query parameter),
+ *   in the request URL query string. Request URLs are never logged and the
+ *   normalized error types never carry URLs.
  * - Full magnet URIs are accepted as input but never logged or echoed.
+ * - Generated download URLs are returned to callers but never logged here.
  */
 
 export const TORBOX_API_BASE = "https://api.torbox.app/v1/api";
@@ -84,6 +88,21 @@ function throwForFailure(
 }
 
 /**
+ * Parse a response body into an envelope, tolerating non-JSON bodies on
+ * non-200 statuses (which become plain status errors instead).
+ */
+function parseEnvelopeLenient(body: string, status: number): TorboxResponse<unknown> | null {
+	try {
+		return parseEnvelope(body);
+	} catch (error) {
+		if (status === 200) {
+			throw error;
+		}
+		return null;
+	}
+}
+
+/**
  * Submit a magnet URI to TorBox.
  * POST /torrents/createtorrent (multipart form, `magnet` field).
  */
@@ -102,15 +121,7 @@ export async function createTorrent(
 		timeoutMs: options.timeoutMs,
 	});
 
-	let envelope: TorboxResponse<unknown> | null = null;
-	try {
-		envelope = parseEnvelope(body);
-	} catch (error) {
-		if (status === 200) {
-			throw error;
-		}
-		// Non-200 with a non-JSON body: fall through to a status error.
-	}
+	const envelope = parseEnvelopeLenient(body, status);
 
 	if (status !== 200 || !envelope || !envelope.success) {
 		throwForFailure(envelope, status);
@@ -140,6 +151,27 @@ export interface ListTorrentsOptions extends TorboxClientOptions {
 	id?: number;
 	limit?: number;
 	offset?: number;
+	/**
+	 * Bypass TorBox's 600-second server-side list cache. Required when
+	 * polling for fresh readiness state (verified in the official docs).
+	 */
+	bypassCache?: boolean;
+}
+
+function normalizeFile(value: unknown): TorboxFile | null {
+	if (!isRecord(value)) {
+		return null;
+	}
+	const id = asNumber(value.id);
+	const name = asString(value.name);
+	if (id === undefined || name === undefined) {
+		return null;
+	}
+	return {
+		id,
+		name,
+		size: asNumber(value.size) ?? 0,
+	};
 }
 
 function normalizeTorrent(value: unknown): TorboxTorrent | null {
@@ -166,13 +198,19 @@ function normalizeTorrent(value: unknown): TorboxTorrent | null {
 		download_speed: asNumber(value.download_speed) ?? 0,
 		upload_speed: asNumber(value.upload_speed) ?? 0,
 		download_finished: value.download_finished === true,
+		download_present: value.download_present === true,
 		cached: value.cached === true,
+		files: Array.isArray(value.files)
+			? value.files
+					.map(normalizeFile)
+					.filter((file): file is TorboxFile => file !== null)
+			: [],
 	};
 }
 
 /**
  * List the account's torrents.
- * GET /torrents/mylist (optional id/offset/limit).
+ * GET /torrents/mylist (optional id/offset/limit/bypass_cache).
  */
 export async function listTorrents(
 	options: ListTorrentsOptions,
@@ -187,6 +225,9 @@ export async function listTorrents(
 	if (options.offset !== undefined) {
 		url.searchParams.set("offset", String(options.offset));
 	}
+	if (options.bypassCache === true) {
+		url.searchParams.set("bypass_cache", "true");
+	}
 
 	const { status, body } = await fetchText(url.toString(), {
 		service: TORBOX_SERVICE,
@@ -194,14 +235,7 @@ export async function listTorrents(
 		timeoutMs: options.timeoutMs,
 	});
 
-	let envelope: TorboxResponse<unknown> | null = null;
-	try {
-		envelope = parseEnvelope(body);
-	} catch (error) {
-		if (status === 200) {
-			throw error;
-		}
-	}
+	const envelope = parseEnvelopeLenient(body, status);
 
 	if (status !== 200 || !envelope || !envelope.success) {
 		throwForFailure(envelope, status);
@@ -217,4 +251,242 @@ export async function listTorrents(
 	return envelope.data
 		.map(normalizeTorrent)
 		.filter((torrent): torrent is TorboxTorrent => torrent !== null);
+}
+
+/**
+ * Fetch a single torrent by id, always with fresh (non-cached) data.
+ * Returns null when the torrent does not exist on the account.
+ *
+ * The official docs state mylist?id=N "will return an object rather than
+ * list"; both the object and array shapes (and an ITEM_NOT_FOUND failure)
+ * are tolerated and normalized.
+ */
+export async function getTorrentById(
+	id: number,
+	options: TorboxClientOptions,
+): Promise<TorboxTorrent | null> {
+	const url = new URL(`${TORBOX_API_BASE}/torrents/mylist`);
+	url.searchParams.set("id", String(id));
+	url.searchParams.set("bypass_cache", "true");
+
+	const { status, body } = await fetchText(url.toString(), {
+		service: TORBOX_SERVICE,
+		headers: { authorization: `Bearer ${options.apiKey}` },
+		timeoutMs: options.timeoutMs,
+	});
+
+	const envelope = parseEnvelopeLenient(body, status);
+
+	if (status !== 200 || !envelope || !envelope.success) {
+		// A missing torrent is reported as ITEM_NOT_FOUND (docs show HTTP 404
+		// with a quirky success:true envelope); normalize it to null.
+		if (
+			envelope &&
+			(envelope.error === "ITEM_NOT_FOUND" || status === 404)
+		) {
+			return null;
+		}
+		throwForFailure(envelope, status);
+	}
+
+	const data = envelope.data;
+	if (data === null || data === undefined) {
+		return null;
+	}
+	if (Array.isArray(data)) {
+		return (
+			data
+				.map(normalizeTorrent)
+				.filter(
+					(torrent): torrent is TorboxTorrent => torrent !== null,
+				)
+				.find((torrent) => torrent.id === id) ?? null
+		);
+	}
+	const torrent = normalizeTorrent(data);
+	return torrent !== null && torrent.id === id ? torrent : null;
+}
+
+/**
+ * Find an existing torrent by its info hash (case-insensitive), using fresh
+ * data. Used to recover the torrent id when createtorrent reports
+ * DUPLICATE_ITEM. Returns null when no matching torrent exists.
+ */
+export async function findTorrentByHash(
+	hash: string,
+	options: TorboxClientOptions,
+): Promise<TorboxTorrent | null> {
+	let torrents: TorboxTorrent[];
+	try {
+		torrents = await listTorrents({ ...options, bypassCache: true });
+	} catch (error) {
+		if (
+			error instanceof UpstreamApiError &&
+			error.code === "ITEM_NOT_FOUND"
+		) {
+			return null;
+		}
+		throw error;
+	}
+	const needle = hash.toLowerCase();
+	return (
+		torrents.find((torrent) => torrent.hash.toLowerCase() === needle) ?? null
+	);
+}
+
+export interface RequestDownloadLinkOptions extends TorboxClientOptions {
+	torrentId: number;
+	/** Download a single file by id. */
+	fileId?: number;
+	/** Download a whole-torrent zip archive. Takes precedence per the docs. */
+	zip?: boolean;
+}
+
+/**
+ * Request a temporary CDN download link from TorBox.
+ * GET /torrents/requestdl?token=…&torrent_id=…(&file_id=…|&zip_link=true)
+ *
+ * Verified behavior (official docs):
+ * - Auth is the API key in the required `token` query parameter; the Bearer
+ *   header is sent as well (collection-level auth).
+ * - `zip_link` is "required if no file_id" and "takes precedence over
+ *   file_id if both are given".
+ * - `data` is a temporary CDN URL string (valid ~3 hours for starting a
+ *   download). The documented permalink form (`redirect=true`) embeds the
+ *   API key in the URL and is deliberately never used.
+ *
+ * Only https: URLs are accepted; anything else is a parse error. The URL is
+ * never logged and never embedded in error messages.
+ */
+export async function requestDownloadLink(
+	options: RequestDownloadLinkOptions,
+): Promise<string> {
+	const url = new URL(`${TORBOX_API_BASE}/torrents/requestdl`);
+	url.searchParams.set("token", options.apiKey);
+	url.searchParams.set("torrent_id", String(options.torrentId));
+	if (options.zip === true || options.fileId === undefined) {
+		url.searchParams.set("zip_link", "true");
+	} else {
+		url.searchParams.set("file_id", String(options.fileId));
+	}
+
+	const { status, body } = await fetchText(url.toString(), {
+		service: TORBOX_SERVICE,
+		headers: { authorization: `Bearer ${options.apiKey}` },
+		timeoutMs: options.timeoutMs,
+	});
+
+	const envelope = parseEnvelopeLenient(body, status);
+
+	if (status !== 200 || !envelope || !envelope.success) {
+		throwForFailure(envelope, status);
+	}
+
+	const raw = asString(envelope.data);
+	if (!raw) {
+		throw new UpstreamParseError(
+			TORBOX_SERVICE,
+			"returned an unexpected download link payload",
+		);
+	}
+	let parsed: URL;
+	try {
+		parsed = new URL(raw);
+	} catch {
+		throw new UpstreamParseError(
+			TORBOX_SERVICE,
+			"returned a malformed download link",
+		);
+	}
+	if (parsed.protocol !== "https:") {
+		throw new UpstreamParseError(
+			TORBOX_SERVICE,
+			"returned a download link with a disallowed protocol",
+		);
+	}
+	return raw;
+}
+
+/**
+ * What to download for a ready torrent. A torrent with exactly one file
+ * yields that file; anything else yields the whole-torrent zip archive
+ * (TorBox's documented archive option), which never requires guessing at
+ * individual files.
+ */
+export type DownloadTarget =
+	| { kind: "file"; file: TorboxFile }
+	| { kind: "zip" };
+
+/**
+ * Deterministic download-target rule:
+ * - exactly one downloadable file -> that file;
+ * - zero or multiple files -> the whole-torrent zip archive.
+ */
+export function selectDownloadTarget(torrent: TorboxTorrent): DownloadTarget {
+	if (torrent.files.length === 1) {
+		return { kind: "file", file: torrent.files[0] };
+	}
+	return { kind: "zip" };
+}
+
+/** Result of the bounded readiness poll. */
+export type TorrentReadiness =
+	| { status: "ready"; torrent: TorboxTorrent }
+	| { status: "processing"; torrent: TorboxTorrent | null }
+	| { status: "not-found" };
+
+export interface PollOptions {
+	/** Delay between polls in milliseconds. */
+	intervalMs: number;
+	/** Hard cap on the number of polls (>= 1). */
+	maxAttempts: number;
+	/** Injectable delay (tests); defaults to setTimeout-based sleep. */
+	sleep?: (ms: number) => Promise<void>;
+}
+
+function defaultSleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Poll a torrent until it is ready, the attempt budget is exhausted, or the
+ * torrent disappears. Fully bounded: at most `maxAttempts` upstream calls,
+ * each with its own upstream timeout, with `intervalMs` between attempts.
+ *
+ * Readiness rule: `download_finished === true`. The docs explicitly say
+ * `download_state: "completed"` must not be used for completion status.
+ *
+ * A torrent that was seen before and then vanishes terminates as
+ * "not-found"; one that was never seen yet (creation propagation) keeps
+ * polling within the budget. Upstream errors (timeout, API, parse, network)
+ * propagate to the caller and stop polling immediately.
+ */
+export async function waitForTorrentReady(
+	id: number,
+	options: TorboxClientOptions,
+	poll: PollOptions,
+): Promise<TorrentReadiness> {
+	const sleep = poll.sleep ?? defaultSleep;
+	const maxAttempts = Math.max(1, Math.floor(poll.maxAttempts));
+	let seen = false;
+	let lastTorrent: TorboxTorrent | null = null;
+
+	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+		const torrent = await getTorrentById(id, options);
+		if (torrent === null) {
+			if (seen) {
+				return { status: "not-found" };
+			}
+		} else {
+			seen = true;
+			lastTorrent = torrent;
+			if (torrent.download_finished) {
+				return { status: "ready", torrent };
+			}
+		}
+		if (attempt < maxAttempts) {
+			await sleep(poll.intervalMs);
+		}
+	}
+	return { status: "processing", torrent: lastTorrent };
 }
