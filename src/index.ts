@@ -8,7 +8,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 return Response.json(body, { status });
 }
 
-export default {
+const handler: ExportedHandler<Env> = {
 async fetch(request, env): Promise<Response> {
 const url = new URL(request.url);
 
@@ -93,4 +93,6 @@ error: "Not found",
 404,
 );
 },
-} satisfies ExportedHandler<Env>;
+};
+
+export default handler;

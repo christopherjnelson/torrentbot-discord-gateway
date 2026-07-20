@@ -10,7 +10,19 @@
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
+	// Non-secret configuration. Comma-separated Discord user IDs allowed to run
+	// /add and /status. Empty means nobody is authorized.
+	"vars": {
+		"TORBOX_ALLOWED_USER_IDS": ""
+	},
+	// Secret bindings the Worker reads at runtime. Set values with
+	// `wrangler secret put <NAME>` (production) or in `.dev.vars` (local dev).
 	"secrets": {
-		"required": ["DISCORD_PUBLIC_KEY"]
+		"required": [
+			"DISCORD_PUBLIC_KEY",
+			"VOYAGER_API_KEY",
+			"TORBOX_API_KEY",
+			"INTERNAL_API_TOKEN"
+		]
 	}
 }

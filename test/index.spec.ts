@@ -14,7 +14,7 @@ it("returns the health response for GET /", async () => {
 const request = new IncomingRequest("https://example.com/");
 const ctx = createExecutionContext();
 
-const response = await worker.fetch(request, env, ctx);
+		const response = await worker.fetch!(request, env, ctx);
 
 await waitOnExecutionContext(ctx);
 

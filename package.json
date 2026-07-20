@@ -7,6 +7,7 @@
     "dev": "wrangler dev",
     "start": "wrangler dev",
     "test": "vitest",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p test/tsconfig.json",
     "cf-typegen": "wrangler types"
   },
   "devDependencies": {
@@ -17,6 +18,7 @@
     "wrangler": "^4.112.0"
   },
   "dependencies": {
-    "discord-interactions": "^4.4.0"
+    "discord-interactions": "^4.4.0",
+    "fast-xml-parser": "^5.10.1"
   }
 }

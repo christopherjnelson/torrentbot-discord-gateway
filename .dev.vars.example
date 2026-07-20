@@ -1,0 +1,18 @@
+# Copy to .dev.vars and fill in real values. Never commit .dev.vars.
+
+# Discord application public key (Discord Developer Portal -> General Information)
+DISCORD_PUBLIC_KEY=replace-me
+# Discord application (client) ID - used by the command registration script
+DISCORD_APPLICATION_ID=replace-me
+# Discord bot token - used by the command registration script only
+DISCORD_BOT_TOKEN=replace-me
+# Development guild (server) ID for guild-scoped command registration
+DISCORD_GUILD_ID=replace-me
+# TorBox API key (https://torbox.app/settings) - used for Voyager search and /add
+TORBOX_API_KEY=replace-me
+# Optional: separate Voyager key if it ever differs from TORBOX_API_KEY
+# VOYAGER_API_KEY=replace-me
+# Bearer token required for the internal /api/* routes (generate a long random string)
+INTERNAL_API_TOKEN=replace-me
+# Non-secret: comma-separated Discord user IDs allowed to run /add and /status
+TORBOX_ALLOWED_USER_IDS=
