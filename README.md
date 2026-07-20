@@ -422,6 +422,16 @@ batch request, and the download-link workflow, plus the security rules for
 credentials and download URLs. Update the skill in the same change when
 verified TorBox API behavior changes.
 
+Before modifying the Prowlarr integration (`src/services/prowlarr.ts`,
+`src/types/search.ts`, `src/commands/search.ts`, `src/utils/selectable.ts`,
+or the `/api/search` route in `src/routes/api.ts`), read the tracked agent
+skill at [`.agents/skills/prowlarr-api/SKILL.md`](.agents/skills/prowlarr-api/SKILL.md).
+It documents the verified search endpoint and `X-Api-Key` authentication,
+result normalization, info-hash format and dedup, the proxy-URL defense,
+deterministic ordering, the five-result cap, the search → selectable →
+TorBox-cache-enrichment workflow, and failure/fallback behavior. Update the
+skill in the same change when verified Prowlarr API behavior changes.
+
 ## Internal API usage (n8n or other automation)
 
 All routes require `Authorization: Bearer $INTERNAL_API_TOKEN`.
