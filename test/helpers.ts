@@ -25,7 +25,8 @@ export function testEnv(overrides: Record<string, string> = {}): Env {
 	return {
 		...env,
 		DISCORD_PUBLIC_KEY: TEST_PUBLIC_KEY_HEX,
-		VOYAGER_API_KEY: "test-voyager-key",
+		PROWLARR_URL: "https://prowlarr.test",
+		PROWLARR_API_KEY: "test-prowlarr-key",
 		TORBOX_API_KEY: "test-torbox-key",
 		INTERNAL_API_TOKEN: "test-internal-token",
 		TORBOX_ALLOWED_USER_IDS: TEST_USER_ID,

@@ -2,7 +2,7 @@ import { createExecutionContext, fetchMock } from "cloudflare:test";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index";
 import { isValidBearer, safeSecretEqual } from "../src/utils/auth";
-import { TORZNAB_TWO_ITEM_XML } from "./fixtures";
+import { PROWLARR_TWO_ITEM_JSON } from "./fixtures";
 import { testEnv } from "./helpers";
 
 const TOKEN = "test-internal-token";
@@ -143,9 +143,9 @@ describe("internal API authentication", () => {
 describe("POST /api/search", () => {
 	it("returns normalized results including magnet URIs", async () => {
 		fetchMock
-			.get("https://search-api.torbox.app")
-			.intercept({ path: /^\/torznab\/api/ })
-			.reply(200, TORZNAB_TWO_ITEM_XML);
+			.get("https://prowlarr.test")
+			.intercept({ path: /^\/api\/v1\/search/ })
+			.reply(200, PROWLARR_TWO_ITEM_JSON);
 
 		const response = await callApi("/api/search", {
 			body: { query: "blade runner" },
@@ -165,13 +165,18 @@ describe("POST /api/search", () => {
 		// Sorted by seeders descending.
 		expect(body.results[0].seeders).toBe(120);
 		expect(body.results[0].magnetUri).toContain("magnet:?xt=urn:btih:");
+		// Prowlarr proxy URLs embed the API key and must never be propagated.
+		const serialized = JSON.stringify(body);
+		expect(serialized).not.toContain("apikey");
+		expect(serialized).not.toContain("prowlarr-key");
+		expect(serialized).not.toContain("/download?");
 	});
 
 	it("respects the limit parameter", async () => {
 		fetchMock
-			.get("https://search-api.torbox.app")
-			.intercept({ path: /^\/torznab\/api/ })
-			.reply(200, TORZNAB_TWO_ITEM_XML);
+			.get("https://prowlarr.test")
+			.intercept({ path: /^\/api\/v1\/search/ })
+			.reply(200, PROWLARR_TWO_ITEM_JSON);
 
 		const response = await callApi("/api/search", {
 			body: { query: "blade runner", limit: 1 },
@@ -195,10 +200,23 @@ describe("POST /api/search", () => {
 		}
 	});
 
+	it("returns 503 when Prowlarr is not configured", async () => {
+		const response = await callApi(
+			"/api/search",
+			{ body: { query: "blade runner" } },
+			{ PROWLARR_API_KEY: "" },
+		);
+		expect(response.status).toBe(503);
+		expect(await response.json()).toEqual({
+			ok: false,
+			error: "Search is not configured on this worker",
+		});
+	});
+
 	it("maps upstream failures to 502", async () => {
 		fetchMock
-			.get("https://search-api.torbox.app")
-			.intercept({ path: /^\/torznab\/api/ })
+			.get("https://prowlarr.test")
+			.intercept({ path: /^\/api\/v1\/search/ })
 			.reply(500, "boom");
 		const response = await callApi("/api/search", {
 			body: { query: "blade runner" },

@@ -8,8 +8,8 @@ import {
 	getStringOption,
 	type DiscordInteraction,
 } from "../discord/types";
-import { searchTorrents, sortResults } from "../services/voyager";
-import type { TorrentResult } from "../types/torznab";
+import { searchProwlarr } from "../services/prowlarr";
+import type { TorrentResult } from "../types/search";
 import {
 	categoryName,
 	DISCORD_CONTENT_LIMIT,
@@ -92,17 +92,18 @@ async function completeSearch(
 	query: string,
 	config: AppConfig,
 ): Promise<void> {
-	// apiKey presence is checked by handleSearchCommand before deferring.
-	const apiKey = config.voyagerApiKey as string;
+	// URL/key presence is checked by handleSearchCommand before deferring.
+	const apiKey = config.prowlarrApiKey as string;
+	const baseUrl = config.prowlarrUrl as string;
 
 	let content: string;
 	try {
-		const results = sortResults(
-			await searchTorrents(query, {
-				apiKey,
-				timeoutMs: config.upstreamTimeoutMs,
-			}),
-		);
+		const results = await searchProwlarr(query, {
+			apiKey,
+			baseUrl,
+			timeoutMs: config.upstreamTimeoutMs,
+			limit: MAX_SEARCH_RESULTS,
+		});
 		content = formatSearchResults(query, results);
 	} catch (error) {
 		logUpstreamFailure("search failed", error);
@@ -138,9 +139,9 @@ export function handleSearchCommand(
 		);
 	}
 
-	if (!config.voyagerApiKey) {
+	if (!config.prowlarrUrl || !config.prowlarrApiKey) {
 		return messageResponse(
-			"Search is not configured on this bot. The owner needs to set a Voyager/TorBox API key.",
+			"Search is not configured on this bot. The owner needs to set the Prowlarr URL and API key.",
 			true,
 		);
 	}

@@ -11,17 +11,19 @@
 		"nodejs_compat"
 	],
 	// Non-secret configuration. Comma-separated Discord user IDs allowed to run
-	// /add and /status. Empty means nobody is authorized.
+	// /add and /status. Empty means nobody is authorized. PROWLARR_URL is the
+	// base URL of the Prowlarr instance backing /search and /api/search.
 	"vars": {
 		"TORBOX_ALLOWED_USER_IDS": "",
-		"UPSTREAM_TIMEOUT_MS": "10000"
+		"UPSTREAM_TIMEOUT_MS": "10000",
+		"PROWLARR_URL": "https://prowlarr.chris.guru"
 	},
 	// Secret bindings the Worker reads at runtime. Set values with
 	// `wrangler secret put <NAME>` (production) or in `.dev.vars` (local dev).
 	"secrets": {
 		"required": [
 			"DISCORD_PUBLIC_KEY",
-			"VOYAGER_API_KEY",
+			"PROWLARR_API_KEY",
 			"TORBOX_API_KEY",
 			"INTERNAL_API_TOKEN"
 		]

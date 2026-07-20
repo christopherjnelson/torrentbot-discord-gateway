@@ -1,6 +1,6 @@
 import { fetchMock, waitOnExecutionContext } from "cloudflare:test";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { TORZNAB_EMPTY_XML, TORZNAB_TWO_ITEM_XML } from "./fixtures";
+import { PROWLARR_EMPTY_JSON, PROWLARR_TWO_ITEM_JSON } from "./fixtures";
 import {
 	dispatchInteraction,
 	interceptOriginalResponseEdit,
@@ -23,11 +23,11 @@ afterAll(() => {
 	fetchMock.deactivate();
 });
 
-function mockVoyager(status: number, body: string) {
+function mockProwlarr(status: number, body: string) {
 	return fetchMock
-		.get("https://search-api.torbox.app")
-		.intercept({ path: /^\/torznab\/api/ })
-		.reply(status, body, { headers: { "content-type": "application/xml" } });
+		.get("https://prowlarr.test")
+		.intercept({ path: /^\/api\/v1\/search/ })
+		.reply(status, body, { headers: { "content-type": "application/json" } });
 }
 
 describe("signed interaction handling", () => {
@@ -110,14 +110,30 @@ describe("/search command", () => {
 		expect(body.data.content).toContain("1-200 characters");
 	});
 
-	it("responds ephemerally when no search API key is configured", async () => {
+	it("responds ephemerally when no Prowlarr API key is configured", async () => {
 		const { response } = await dispatchInteraction(
 			JSON.stringify(
 				makeCommandInteraction("search", [
 					{ name: "query", type: 3, value: "blade runner" },
 				]),
 			),
-			{ VOYAGER_API_KEY: "", TORBOX_API_KEY: "" },
+			{ PROWLARR_API_KEY: "" },
+		);
+		const body = (await response.json()) as {
+			data: { flags?: number; content: string };
+		};
+		expect(body.data.flags).toBe(64);
+		expect(body.data.content).toContain("not configured");
+	});
+
+	it("responds ephemerally when no Prowlarr URL is configured", async () => {
+		const { response } = await dispatchInteraction(
+			JSON.stringify(
+				makeCommandInteraction("search", [
+					{ name: "query", type: 3, value: "blade runner" },
+				]),
+			),
+			{ PROWLARR_URL: "" },
 		);
 		const body = (await response.json()) as {
 			data: { flags?: number; content: string };
@@ -127,7 +143,7 @@ describe("/search command", () => {
 	});
 
 	it("defers, then edits the original response with formatted results", async () => {
-		mockVoyager(200, TORZNAB_TWO_ITEM_XML);
+		mockProwlarr(200, PROWLARR_TWO_ITEM_JSON);
 		const { captured } = interceptOriginalResponseEdit();
 
 		const { ctx, response } = await dispatchInteraction(
@@ -161,14 +177,17 @@ describe("/search command", () => {
 		expect(content).toContain("Movies");
 		expect(content).toContain("magnet ✓");
 		expect(content).toContain("ExampleTracker");
-		// Magnet URIs must never appear in Discord output.
+		// Magnet URIs and Prowlarr proxy URLs (which embed the API key) must
+		// never appear in Discord output.
 		expect(content).not.toContain("magnet:?xt");
 		expect(content).not.toContain("btih");
+		expect(content).not.toContain("apikey");
+		expect(content).not.toContain("prowlarr-key");
 		expect(content.length).toBeLessThanOrEqual(2000);
 	});
 
 	it("reports empty result sets", async () => {
-		mockVoyager(200, TORZNAB_EMPTY_XML);
+		mockProwlarr(200, PROWLARR_EMPTY_JSON);
 		const { captured } = interceptOriginalResponseEdit();
 
 		const { ctx } = await dispatchInteraction(
@@ -186,7 +205,7 @@ describe("/search command", () => {
 	});
 
 	it("reports upstream HTTP failures gracefully", async () => {
-		mockVoyager(500, "boom");
+		mockProwlarr(500, "boom");
 		const { captured } = interceptOriginalResponseEdit();
 
 		const { ctx } = await dispatchInteraction(
@@ -201,8 +220,9 @@ describe("/search command", () => {
 		expect(captured[0].body.content).toContain("HTTP 500");
 	});
 
-	it("reports upstream rate limiting", async () => {
-		mockVoyager(429, '{"error":"Rate limit exceeded: 0 per 1 minute"}');
+	it("reports invalid Prowlarr credentials gracefully", async () => {
+		// Prowlarr answers a missing/invalid API key with 401.
+		mockProwlarr(401, "");
 		const { captured } = interceptOriginalResponseEdit();
 
 		const { ctx } = await dispatchInteraction(
@@ -214,14 +234,14 @@ describe("/search command", () => {
 		);
 		await waitOnExecutionContext(ctx);
 
-		expect(captured[0].body.content).toContain("rate limiting");
+		expect(captured[0].body.content).toContain("rejected the configured credentials");
 	});
 
 	it("reports upstream timeouts", async () => {
 		fetchMock
-			.get("https://search-api.torbox.app")
-			.intercept({ path: /^\/torznab\/api/ })
-			.reply(200, TORZNAB_EMPTY_XML)
+			.get("https://prowlarr.test")
+			.intercept({ path: /^\/api\/v1\/search/ })
+			.reply(200, PROWLARR_EMPTY_JSON)
 			.delay(200);
 		const { captured } = interceptOriginalResponseEdit();
 
@@ -238,8 +258,8 @@ describe("/search command", () => {
 		expect(captured[0].body.content).toContain("timed out");
 	});
 
-	it("reports malformed upstream XML gracefully", async () => {
-		mockVoyager(200, "<rss><channel><title>broken");
+	it("reports malformed upstream JSON gracefully", async () => {
+		mockProwlarr(200, "[{not json");
 		const { captured } = interceptOriginalResponseEdit();
 
 		const { ctx } = await dispatchInteraction(

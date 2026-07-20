@@ -7,7 +7,7 @@
  */
 
 /** Which upstream service failed. */
-export type UpstreamService = "voyager" | "torbox" | "discord";
+export type UpstreamService = "prowlarr" | "torbox" | "discord";
 
 /** The upstream service did not respond within the configured timeout. */
 export class UpstreamTimeoutError extends Error {
@@ -52,17 +52,6 @@ export class UpstreamParseError extends Error {
 		super(`${service} ${detail}`);
 		this.name = "UpstreamParseError";
 		this.service = service;
-	}
-}
-
-/** The Torznab endpoint returned a protocol-level <error> document. */
-export class TorznabResponseError extends Error {
-	readonly code: string | null;
-
-	constructor(description: string, code: string | null) {
-		super(description);
-		this.name = "TorznabResponseError";
-		this.code = code;
 	}
 }
 

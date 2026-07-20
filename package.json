@@ -20,7 +20,6 @@
     "wrangler": "^4.112.0"
   },
   "dependencies": {
-    "discord-interactions": "^4.4.0",
-    "fast-xml-parser": "^5.10.1"
+    "discord-interactions": "^4.4.0"
   }
 }

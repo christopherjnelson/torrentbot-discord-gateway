@@ -1,7 +1,6 @@
 import { editOriginalResponse } from "../discord/client";
 import type { DiscordInteraction } from "../discord/types";
 import {
-	TorznabResponseError,
 	UpstreamApiError,
 	UpstreamNetworkError,
 	UpstreamParseError,
@@ -33,9 +32,6 @@ export function upstreamErrorMessage(error: unknown): string {
 			return "The upstream service is rate limiting us right now. Try again in a minute.";
 		}
 		return `The upstream service returned an error (HTTP ${error.status}). Try again later.`;
-	}
-	if (error instanceof TorznabResponseError) {
-		return `The search service could not complete the request: ${error.message}`;
 	}
 	if (error instanceof UpstreamParseError) {
 		return "The upstream service returned an unexpected response. Please try again later.";

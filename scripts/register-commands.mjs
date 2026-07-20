@@ -36,7 +36,7 @@ if (missingVariables.length > 0) {
 const commands = [
 	{
 		name: "search",
-		description: "Search TorBox Voyager for torrents",
+		description: "Search Prowlarr for torrents",
 		type: 1,
 		options: [
 			{

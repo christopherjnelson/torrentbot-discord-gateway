@@ -10,19 +10,17 @@
 export interface AppConfig {
 	/** Discord application public key (Ed25519) for request verification. */
 	discordPublicKey: string | undefined;
-	/**
-	 * API key for the Voyager Torznab search endpoint. Falls back to
-	 * TORBOX_API_KEY: per TorBox docs the Voyager `apikey` is the account's
-	 * TorBox API key (documented assumption in README).
-	 */
-	voyagerApiKey: string | undefined;
+	/** Base URL of the Prowlarr instance backing /search and /api/search. */
+	prowlarrUrl: string | undefined;
+	/** Prowlarr API key (sent as the X-Api-Key header). */
+	prowlarrApiKey: string | undefined;
 	/** TorBox API key for /add and /status and /api/torrents. */
 	torboxApiKey: string | undefined;
 	/** Bearer token required on all /api/* routes. */
 	internalApiToken: string | undefined;
 	/** Discord user IDs allowed to run /add and /status. */
 	torboxAllowedUserIds: string[];
-	/** Timeout applied to Voyager/TorBox upstream calls. */
+	/** Timeout applied to Prowlarr/TorBox upstream calls. */
 	upstreamTimeoutMs: number;
 }
 
@@ -45,11 +43,11 @@ function readTimeoutMs(value: unknown): number {
 }
 
 export function getConfig(env: Env): AppConfig {
-	const torboxApiKey = readString(env.TORBOX_API_KEY);
 	return {
 		discordPublicKey: readString(env.DISCORD_PUBLIC_KEY),
-		voyagerApiKey: readString(env.VOYAGER_API_KEY) ?? torboxApiKey,
-		torboxApiKey,
+		prowlarrUrl: readString(env.PROWLARR_URL),
+		prowlarrApiKey: readString(env.PROWLARR_API_KEY),
+		torboxApiKey: readString(env.TORBOX_API_KEY),
 		internalApiToken: readString(env.INTERNAL_API_TOKEN),
 		torboxAllowedUserIds: (readString(env.TORBOX_ALLOWED_USER_IDS) ?? "")
 			.split(",")

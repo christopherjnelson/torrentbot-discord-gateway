@@ -1,12 +1,11 @@
 import { getConfig, type AppConfig } from "../config";
 import { progressPercent } from "../commands/status";
 import { createTorrent, listTorrents } from "../services/torbox";
-import { searchTorrents, sortResults } from "../services/voyager";
-import type { TorrentResult } from "../types/torznab";
+import { searchProwlarr } from "../services/prowlarr";
+import type { TorrentResult } from "../types/search";
 import type { TorboxTorrent } from "../types/torbox";
 import { isValidBearer } from "../utils/auth";
 import {
-	TorznabResponseError,
 	UpstreamApiError,
 	UpstreamNetworkError,
 	UpstreamParseError,
@@ -54,9 +53,6 @@ function upstreamFailure(error: unknown): Response {
 			return fail("Upstream service rate limited the request", 429);
 		}
 		return fail(`Upstream service returned HTTP ${error.status}`, 502);
-	}
-	if (error instanceof TorznabResponseError) {
-		return fail(sanitizeInline(error.message, 200), 502);
 	}
 	if (
 		error instanceof UpstreamParseError ||
@@ -152,21 +148,21 @@ async function handleSearch(
 		limit = body.limit;
 	}
 
-	if (!config.voyagerApiKey) {
+	if (!config.prowlarrUrl || !config.prowlarrApiKey) {
 		return fail("Search is not configured on this worker", 503);
 	}
 
 	try {
-		const results = sortResults(
-			await searchTorrents(query, {
-				apiKey: config.voyagerApiKey,
-				timeoutMs: config.upstreamTimeoutMs,
-			}),
-		);
+		const results = await searchProwlarr(query, {
+			apiKey: config.prowlarrApiKey,
+			baseUrl: config.prowlarrUrl,
+			timeoutMs: config.upstreamTimeoutMs,
+			limit,
+		});
 		return ok({
 			query,
-			count: Math.min(results.length, limit),
-			results: results.slice(0, limit).map(serializeResult),
+			count: results.length,
+			results: results.map(serializeResult),
 		});
 	} catch (error) {
 		return upstreamFailure(error);

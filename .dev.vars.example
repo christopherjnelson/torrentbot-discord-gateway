@@ -8,10 +8,14 @@ DISCORD_APPLICATION_ID=replace-me
 DISCORD_BOT_TOKEN=replace-me
 # Development guild (server) ID for guild-scoped command registration
 DISCORD_GUILD_ID=replace-me
-# TorBox API key (https://torbox.app/settings) - used for Voyager search and /add
+# Prowlarr API key (Prowlarr -> Settings -> General -> Security -> API Key)
+# - used for /search and /api/search
+PROWLARR_API_KEY=replace-me
+# Optional local override for the Prowlarr base URL (defaults to the
+# PROWLARR_URL var in wrangler.jsonc)
+# PROWLARR_URL=https://prowlarr.chris.guru
+# TorBox API key (https://torbox.app/settings) - used for /add and /status
 TORBOX_API_KEY=replace-me
-# Optional: separate Voyager key if it ever differs from TORBOX_API_KEY
-# VOYAGER_API_KEY=replace-me
 # Bearer token required for the internal /api/* routes (generate a long random string)
 INTERNAL_API_TOKEN=replace-me
 # Non-secret: comma-separated Discord user IDs allowed to run /add and /status
