@@ -237,6 +237,20 @@ describe("/search command", () => {
 
 	it("defers, then edits the original response with formatted results", async () => {
 		mockProwlarr(200, PROWLARR_TWO_ITEM_JSON);
+		// Best-effort TorBox cache check: nothing cached (data: null), so no
+		// badges are appended and the option descriptions stay unchanged.
+		fetchMock
+			.get("https://api.torbox.app")
+			.intercept({ path: /\/v1\/api\/torrents\/checkcached/, method: "POST" })
+			.reply(
+				200,
+				JSON.stringify({
+					success: true,
+					error: null,
+					detail: "Torrent cache status retrieved successfully.",
+					data: null,
+				}),
+			);
 		const { captured } = interceptOriginalResponseEdit();
 
 		const { ctx, response } = await dispatchInteraction(
@@ -378,5 +392,344 @@ describe("/search command", () => {
 		await waitOnExecutionContext(ctx);
 
 		expect(captured[0].body.content).toContain("unexpected response");
+	});
+});
+
+/** Intercept one POST /torrents/checkcached call, optionally counting. */
+function interceptCheckCached(
+	replyStatus: number,
+	replyBody: string,
+): { calls: () => number } {
+	let calls = 0;
+	fetchMock
+		.get("https://api.torbox.app")
+		.intercept({ path: /\/v1\/api\/torrents\/checkcached/, method: "POST" })
+		.reply((opts) => {
+			calls++;
+			return { statusCode: replyStatus, data: replyBody };
+		});
+	return { calls: () => calls };
+}
+
+const CHECKCACHED_UNCACHED = JSON.stringify({
+	success: true,
+	error: null,
+	detail: "Torrent cache status retrieved successfully.",
+	data: null,
+});
+
+/** Prowlarr fixture with three valid-hash results and one invalid-hash row. */
+const PROWLARR_CACHE_JSON = JSON.stringify([
+	{
+		title: "Cached.Release.1080p",
+		size: 2147483648,
+		seeders: 7049,
+		leechers: 6,
+		indexer: "The Pirate Bay",
+		infoUrl: "https://indexer.example/details/aaa",
+		infoHash: "0123456789abcdef0123456789abcdef01234567",
+		categories: [{ id: 2040, name: "Movies HD" }],
+	},
+	{
+		title: "Uncached.Release.1080p",
+		size: 1468006400,
+		seeders: 120,
+		leechers: 20,
+		indexer: "ExampleTracker",
+		infoUrl: "https://indexer.example/details/bbb",
+		infoHash: "89abcdef012345670123456789abcdef01234567",
+		categories: [{ id: 2030, name: "Movies HD" }],
+	},
+	{
+		title: "Unknown.Release.1080p",
+		size: 734003200,
+		seeders: 12,
+		leechers: 3,
+		indexer: "OtherTracker",
+		infoUrl: "https://indexer.example/details/ccc",
+		infoHash: "fedcba9876543210fedcba9876543210fedcba98",
+		categories: [{ id: 2030, name: "Movies HD" }],
+	},
+	{
+		// No info hash -> excluded from the select menu and the cache check.
+		title: "Hashless.Release",
+		size: 1000,
+		seeders: 1,
+		leechers: 0,
+		indexer: "NoHashTracker",
+		infoUrl: "https://indexer.example/details/none",
+		infoHash: "short",
+		categories: [{ id: 2030, name: "Movies HD" }],
+	},
+]);
+
+describe("/search TorBox cache enrichment", () => {
+	function selectOptions(captured: { body: { components?: any[] } }[]): any[] {
+		const edit = captured[0];
+		const components = (edit.body as any).components as any[];
+		const select = components[0].components[0];
+		return select.options;
+	}
+
+	it("appends the cache badge to a cached result and omits it elsewhere", async () => {
+		mockProwlarr(200, PROWLARR_CACHE_JSON);
+		interceptCheckCached(
+			200,
+			JSON.stringify({
+				success: true,
+				error: null,
+				detail: "Torrent cache status retrieved successfully.",
+				data: {
+					// Only the first (cached) hash is present.
+					"0123456789abcdef0123456789abcdef01234567": {
+						name: "n",
+						size: 1,
+						hash: "0123456789abcdef0123456789abcdef01234567",
+					},
+				},
+			}),
+		);
+		const { captured } = interceptOriginalResponseEdit();
+
+		const { ctx } = await dispatchInteraction(
+			JSON.stringify(
+				makeCommandInteraction("search", [
+					{ name: "query", type: 3, value: "blade runner" },
+				]),
+			),
+			{ COMPONENT_SIGNING_SECRET: "test-signing-secret-32-bytes-long!" },
+		);
+		await waitOnExecutionContext(ctx);
+
+		const options = selectOptions(captured);
+		// Deterministic order: seeders desc -> cached result ranks first.
+		expect(options[0].label).toBe("Cached.Release.1080p");
+		expect(options[0].description).toContain("⚡ Cached");
+		expect(options[0].description).toContain("2 GiB");
+		expect(options[0].description).toContain("7049 seeds");
+		expect(options[0].description).toContain("The Pirate Bay");
+
+		// Uncached and unknown results get no cache wording.
+		for (const opt of options.slice(1)) {
+			expect(opt.description).not.toContain("Cached");
+			expect(opt.description).not.toContain("⚡");
+		}
+
+		// The invalid-hash row is excluded from the select menu entirely.
+		expect(options.map((o: any) => o.label)).not.toContain("Hashless.Release");
+	});
+
+	it("matches cached status by normalized hash (uppercase Prowlarr hash)", async () => {
+		mockProwlarr(
+			200,
+			JSON.stringify([
+				{
+					title: "Up.Hash.Release",
+					size: 1468006400,
+					seeders: 100,
+					leechers: 0,
+					indexer: "Tracker",
+					infoUrl: "https://indexer.example/details/u",
+					infoHash: "0123456789ABCDEF0123456789ABCDEF01234567",
+					categories: [{ id: 2040, name: "Movies HD" }],
+				},
+			]),
+		);
+		interceptCheckCached(
+			200,
+			JSON.stringify({
+				success: true,
+				error: null,
+				detail: "Torrent cache status retrieved successfully.",
+				data: {
+					"0123456789abcdef0123456789abcdef01234567": {
+						name: "n",
+						size: 1,
+						hash: "0123456789abcdef0123456789abcdef01234567",
+					},
+				},
+			}),
+		);
+		const { captured } = interceptOriginalResponseEdit();
+
+		const { ctx } = await dispatchInteraction(
+			JSON.stringify(
+				makeCommandInteraction("search", [
+					{ name: "query", type: 3, value: "x" },
+				]),
+			),
+			{ COMPONENT_SIGNING_SECRET: "test-signing-secret-32-bytes-long!" },
+		);
+		await waitOnExecutionContext(ctx);
+
+		const options = selectOptions(captured);
+		expect(options[0].description).toContain("⚡ Cached");
+	});
+
+	it("makes exactly one cache request for up to five results", async () => {
+		mockProwlarr(200, PROWLARR_CACHE_JSON);
+		const check = interceptCheckCached(200, CHECKCACHED_UNCACHED);
+		const { captured } = interceptOriginalResponseEdit();
+
+		const { ctx } = await dispatchInteraction(
+			JSON.stringify(
+				makeCommandInteraction("search", [
+					{ name: "query", type: 3, value: "blade runner" },
+				]),
+			),
+			{ COMPONENT_SIGNING_SECRET: "test-signing-secret-32-bytes-long!" },
+		);
+		await waitOnExecutionContext(ctx);
+
+		expect(check.calls()).toBe(1);
+		// Sanity: the select menu has the three valid-hash results.
+		expect(selectOptions(captured)).toHaveLength(3);
+	});
+
+	it("still returns search results when the cache check fails", async () => {
+		mockProwlarr(200, PROWLARR_CACHE_JSON);
+		interceptCheckCached(500, "boom");
+		const { captured } = interceptOriginalResponseEdit();
+
+		const { ctx } = await dispatchInteraction(
+			JSON.stringify(
+				makeCommandInteraction("search", [
+					{ name: "query", type: 3, value: "blade runner" },
+				]),
+			),
+			{ COMPONENT_SIGNING_SECRET: "test-signing-secret-32-bytes-long!" },
+		);
+		await waitOnExecutionContext(ctx);
+
+		const content = captured[0].body.content ?? "";
+		expect(content).toContain("Choose a release for **blade runner**:");
+		const options = selectOptions(captured);
+		expect(options).toHaveLength(3);
+		// No badges when the cache check failed.
+		for (const opt of options) {
+			expect(opt.description ?? "").not.toContain("Cached");
+		}
+	});
+
+	it("skips the cache check when TorBox is not configured", async () => {
+		mockProwlarr(200, PROWLARR_CACHE_JSON);
+		// No checkcached interceptor: if a request were made it would throw
+		// and the /search results would still come back without badges.
+		const { captured } = interceptOriginalResponseEdit();
+
+		const { ctx } = await dispatchInteraction(
+			JSON.stringify(
+				makeCommandInteraction("search", [
+					{ name: "query", type: 3, value: "blade runner" },
+				]),
+			),
+			{
+				COMPONENT_SIGNING_SECRET: "test-signing-secret-32-bytes-long!",
+				TORBOX_API_KEY: "",
+			},
+		);
+		await waitOnExecutionContext(ctx);
+
+		const options = selectOptions(captured);
+		expect(options).toHaveLength(3);
+		for (const opt of options) {
+			expect(opt.description ?? "").not.toContain("Cached");
+		}
+	});
+
+	it("never shows hashes, magnets, or badges-in-content in visible output", async () => {
+		mockProwlarr(200, PROWLARR_CACHE_JSON);
+		interceptCheckCached(
+			200,
+			JSON.stringify({
+				success: true,
+				error: null,
+				detail: "ok",
+				data: {
+					"0123456789abcdef0123456789abcdef01234567": {
+						name: "n",
+						size: 1,
+						hash: "0123456789abcdef0123456789abcdef01234567",
+					},
+				},
+			}),
+		);
+		const { captured } = interceptOriginalResponseEdit();
+
+		const { ctx } = await dispatchInteraction(
+			JSON.stringify(
+				makeCommandInteraction("search", [
+					{ name: "query", type: 3, value: "blade runner" },
+				]),
+			),
+			{ COMPONENT_SIGNING_SECRET: "test-signing-secret-32-bytes-long!" },
+		);
+		await waitOnExecutionContext(ctx);
+
+		const edit = captured[0];
+		const content = edit.body.content ?? "";
+		const options = selectOptions(captured);
+		const visible = `${content} ${JSON.stringify(options)}`;
+
+		expect(content).not.toContain("magnet:?xt");
+		expect(content).not.toContain("btih");
+		for (const opt of options) {
+			// No hash in label or description.
+			expect(opt.label).not.toMatch(/[0-9a-f]{40}/i);
+			expect(opt.description ?? "").not.toMatch(/[0-9a-f]{40}/i);
+			// No "Not cached" wording.
+			expect(opt.description ?? "").not.toContain("Not cached");
+		}
+		// The badge only ever appears inside option descriptions.
+		expect(visible).toContain("⚡ Cached");
+	});
+
+	it("keeps option descriptions within Discord's 100-char limit", async () => {
+		mockProwlarr(
+			200,
+			JSON.stringify([
+				{
+					title: "Cached.Release.With.A.Very.Long.Source.Name.That.Could.Overflow.The.Description.Limit.When.Joined",
+					size: 2147483648,
+					seeders: 7049,
+					leechers: 6,
+					indexer: "Extremely Long Indexer Display Name That Eats Description Budget",
+					infoUrl: "https://indexer.example/details/aaa",
+					infoHash: "0123456789abcdef0123456789abcdef01234567",
+					categories: [{ id: 2040, name: "Movies HD" }],
+				},
+			]),
+		);
+		interceptCheckCached(
+			200,
+			JSON.stringify({
+				success: true,
+				error: null,
+				detail: "ok",
+				data: {
+					"0123456789abcdef0123456789abcdef01234567": {
+						name: "n",
+						size: 1,
+						hash: "0123456789abcdef0123456789abcdef01234567",
+					},
+				},
+			}),
+		);
+		const { captured } = interceptOriginalResponseEdit();
+
+		const { ctx } = await dispatchInteraction(
+			JSON.stringify(
+				makeCommandInteraction("search", [
+					{ name: "query", type: 3, value: "blade runner" },
+				]),
+			),
+			{ COMPONENT_SIGNING_SECRET: "test-signing-secret-32-bytes-long!" },
+		);
+		await waitOnExecutionContext(ctx);
+
+		const options = selectOptions(captured);
+		for (const opt of options) {
+			expect((opt.description ?? "").length).toBeLessThanOrEqual(100);
+		}
 	});
 });

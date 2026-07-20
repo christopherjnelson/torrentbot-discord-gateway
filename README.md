@@ -33,7 +33,7 @@ and no Voyager API key is required.
 
 | Command | Description | Who can use it |
 | --- | --- | --- |
-| `/search query:<text>` | Search Prowlarr, show the top 5 results (title, size, seeders, category/source, magnet/hash availability); results with valid info hashes include a select menu to add to TorBox | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
+| `/search query:<text>` | Search Prowlarr, show the top 5 results (title, size, seeders, category/source, magnet/hash availability); results with valid info hashes include a select menu to add to TorBox. Selectable results are checked against TorBox's cache in one batch request and cached ones are marked with `⚡ Cached` | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
 | `/add magnet:<uri>` | Submit a magnet URI to TorBox | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
 | `/status` | List the TorBox account's downloads (ephemeral) | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
 
@@ -56,6 +56,14 @@ original response through the follow-up webhook
 When `/search` returns results with valid info hashes, it also includes a
 Discord select menu component. The original requester can use this menu to
 submit a selected result to TorBox without manually copying the magnet URI.
+
+During `/search`, the selectable results' info hashes are also checked
+against TorBox's `POST /torrents/checkcached` endpoint in a single batch
+request. Results TorBox already holds are marked with a `⚡ Cached` badge in
+the option description; uncached or unknown results are not labeled. The
+check is **advisory only**: it does not add anything to the TorBox account,
+and if TorBox is not configured or the cache check fails for any reason,
+`/search` still returns the normal Prowlarr results without badges.
 
 When an authorized member selects a result, the bot:
 
@@ -384,6 +392,11 @@ Verified (2026-07-19):
   api-docs.torbox.app and the live OpenAPI spec at api.torbox.app/openapi.json),
   including the `{success, error, detail, data}` envelope, the documented
   download states, and `download_finished` as the supported completion signal.
+  Also verified `POST /torrents/checkcached` (JSON body `{ hashes: [...] }`,
+  Bearer auth, `format` query param defaulting to `object`): `data` is a map
+  keyed by hash and a hash present in `data` means it is cached, while
+  uncached/unknown hashes are simply absent (the documented "Success Uncached"
+  example returns `data: null`). Hashes are matched case-insensitively.
 - Discord message-component interactions: `UPDATE_MESSAGE` (callback type 7)
   edits the message the component was attached to (used to remove the search
   select menu), and interaction followups (`POST /webhooks/{app}/{token}` with

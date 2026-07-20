@@ -1,6 +1,7 @@
 import { fetchMock } from "cloudflare:test";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	checkTorrentCache,
 	createTorrent,
 	findTorrentByHash,
 	getTorrentById,
@@ -787,5 +788,277 @@ describe("waitForTorrentReady", () => {
 			waitForTorrentReady(42, { apiKey: "k" }, poll),
 		).rejects.toBeInstanceOf(UpstreamParseError);
 		expect(calls).toBe(1);
+	});
+});
+
+const HASH_A = "0123456789abcdef0123456789abcdef01234567";
+const HASH_B = "89abcdef012345670123456789abcdef01234567";
+const HASH_C = "fedcba9876543210fedcba9876543210fedcba98";
+
+function cacheEnvelopeOk(data: unknown): string {
+	return JSON.stringify({
+		success: true,
+		error: null,
+		detail: "Torrent cache status retrieved successfully.",
+		data,
+	});
+}
+
+/** Intercept one POST /torrents/checkcached call, capturing request shape. */
+function interceptCheckCached(
+	replyStatus: number,
+	replyBody: string,
+): {
+	calls: () => number;
+	auth: () => string | undefined;
+	path: () => string | undefined;
+	body: () => unknown;
+} {
+	let calls = 0;
+	let auth: string | undefined;
+	let path: string | undefined;
+	let body: unknown;
+	fetchMock
+		.get("https://api.torbox.app")
+		.intercept({ path: /\/v1\/api\/torrents\/checkcached/, method: "POST" })
+		.reply((opts) => {
+			calls++;
+			const headers = opts.headers as Record<string, string>;
+			auth = headers.authorization ?? headers.Authorization;
+			path = opts.path;
+			body = String(opts.body);
+			return { statusCode: replyStatus, data: replyBody };
+		});
+	return {
+		calls: () => calls,
+		auth: () => auth,
+		path: () => path,
+		body: () => body,
+	};
+}
+
+describe("checkTorrentCache", () => {
+	it("returns the set of cached hashes (object format, key present = cached)", async () => {
+		interceptCheckCached(
+			200,
+			cacheEnvelopeOk({
+				[HASH_A]: { name: "n", size: 1, hash: HASH_A },
+			}),
+		);
+
+		const cached = await checkTorrentCache([HASH_A, HASH_B], {
+			apiKey: "k",
+		});
+
+		expect(cached).toEqual(new Set([HASH_A]));
+	});
+
+	it("sends all hashes in a single batch request with bearer auth", async () => {
+		const seen = interceptCheckCached(200, cacheEnvelopeOk({}));
+
+		await checkTorrentCache([HASH_A, HASH_B, HASH_C], { apiKey: "k" });
+
+		expect(seen.calls()).toBe(1);
+		expect(seen.auth()).toBe("Bearer k");
+		const url = new URL(`https://api.torbox.app${seen.path()}`);
+		expect(url.pathname).toBe("/v1/api/torrents/checkcached");
+		expect(url.searchParams.get("format")).toBe("object");
+		const parsed = JSON.parse(seen.body() as string) as { hashes: string[] };
+		expect(parsed.hashes).toEqual([HASH_A, HASH_B, HASH_C]);
+	});
+
+	it("marks mixed cached and uncached hashes correctly", async () => {
+		interceptCheckCached(
+			200,
+			cacheEnvelopeOk({
+				[HASH_A]: { name: "n", size: 1, hash: HASH_A },
+				[HASH_C]: { name: "n", size: 1, hash: HASH_C },
+			}),
+		);
+
+		const cached = await checkTorrentCache(
+			[HASH_A, HASH_B, HASH_C],
+			{ apiKey: "k" },
+		);
+
+		expect(cached).toEqual(new Set([HASH_A, HASH_C]));
+	});
+
+	it("deduplicates input hashes before sending them once", async () => {
+		const seen = interceptCheckCached(200, cacheEnvelopeOk({}));
+
+		await checkTorrentCache(
+			[HASH_A, HASH_A.toUpperCase(), HASH_A],
+			{ apiKey: "k" },
+		);
+
+		const parsed = JSON.parse(seen.body() as string) as { hashes: string[] };
+		// Normalized (lowercased) and deduped.
+		expect(parsed.hashes).toEqual([HASH_A]);
+		expect(parsed.hashes).toHaveLength(1);
+	});
+
+	it("matches cached status case-insensitively", async () => {
+		// TorBox keys the map by the lowercase hash even when the request
+		// sent an uppercase one; the result set is normalized to lowercase
+		// so a case-insensitive caller lookup is straightforward.
+		interceptCheckCached(
+			200,
+			cacheEnvelopeOk({
+				[HASH_A]: { name: "n", size: 1, hash: HASH_A },
+			}),
+		);
+
+		const cached = await checkTorrentCache(
+			[HASH_A.toUpperCase()],
+			{ apiKey: "k" },
+		);
+
+		expect(cached.has(HASH_A)).toBe(true);
+		// The caller lowercases before lookup (see search enrichment).
+		expect(cached.has(HASH_A.toUpperCase().toLowerCase())).toBe(true);
+	});
+
+	it("excludes invalid hashes from the request", async () => {
+		const seen = interceptCheckCached(200, cacheEnvelopeOk({}));
+
+		await checkTorrentCache(
+			[HASH_A, "short", "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ", "", HASH_B],
+			{ apiKey: "k" },
+		);
+
+		const parsed = JSON.parse(seen.body() as string) as { hashes: string[] };
+		expect(parsed.hashes).toEqual([HASH_A, HASH_B]);
+	});
+
+	it("tolerates partial / malformed object entries", async () => {
+		interceptCheckCached(
+			200,
+			cacheEnvelopeOk({
+				[HASH_A]: { name: "n", size: 1, hash: HASH_A },
+				"not-a-hash": { name: "n", size: 1, hash: HASH_B },
+				[HASH_C]: null,
+				[HASH_B]: "garbage",
+			}),
+		);
+
+		const cached = await checkTorrentCache(
+			[HASH_A, HASH_B, HASH_C],
+			{ apiKey: "k" },
+		);
+
+		// Valid-hash keys are cached regardless of their (possibly partial)
+		// value; the entry with a non-hash key but a valid inner hash is
+		// also accepted.
+		expect(cached).toEqual(new Set([HASH_A, HASH_B, HASH_C]));
+	});
+
+	it("tolerates the list response shape", async () => {
+		interceptCheckCached(
+			200,
+			cacheEnvelopeOk([
+				{ name: "n", size: 1, hash: HASH_A },
+				{ name: "n", size: 1, hash: HASH_C },
+				{ name: "n", size: 1, hash: "nope" },
+				{},
+				null,
+			]),
+		);
+
+		const cached = await checkTorrentCache(
+			[HASH_A, HASH_B, HASH_C],
+			{ apiKey: "k" },
+		);
+
+		expect(cached).toEqual(new Set([HASH_A, HASH_C]));
+	});
+
+	it("treats a null data payload as nothing cached", async () => {
+		interceptCheckCached(200, cacheEnvelopeOk(null));
+
+		const cached = await checkTorrentCache([HASH_A], { apiKey: "k" });
+		expect(cached).toEqual(new Set());
+	});
+
+	it("treats an unexpected data shape as nothing cached (no throw)", async () => {
+		interceptCheckCached(200, cacheEnvelopeOk("garbage"));
+
+		const cached = await checkTorrentCache([HASH_A], { apiKey: "k" });
+		expect(cached).toEqual(new Set());
+	});
+
+	it("makes no request for empty input", async () => {
+		// No interceptor registered; if a request were made undici-mock
+		// would throw and the assertion below would fail.
+		const cached = await checkTorrentCache([], { apiKey: "k" });
+		expect(cached).toEqual(new Set());
+	});
+
+	it("makes no request when all inputs are invalid", async () => {
+		const cached = await checkTorrentCache(
+			["short", "ZZZZ", "", " "],
+			{ apiKey: "k" },
+		);
+		expect(cached).toEqual(new Set());
+	});
+
+	it("throws UpstreamStatusError on a non-200 non-JSON failure", async () => {
+		interceptCheckCached(500, "boom");
+		await expect(checkTorrentCache([HASH_A], { apiKey: "k" })).rejects.toMatchObject(
+			{ name: "UpstreamStatusError", status: 500 },
+		);
+	});
+
+	it("throws UpstreamApiError on success:false", async () => {
+		interceptCheckCached(
+			403,
+			JSON.stringify({
+				success: false,
+				error: "BAD_TOKEN",
+				detail: "Your token is invalid or has expired.",
+				data: null,
+			}),
+		);
+		await expect(checkTorrentCache([HASH_A], { apiKey: "bad" })).rejects.toMatchObject(
+			{ name: "UpstreamApiError", code: "BAD_TOKEN" },
+		);
+	});
+
+	it("throws UpstreamParseError on malformed JSON on a 200", async () => {
+		interceptCheckCached(200, "not json");
+		await expect(checkTorrentCache([HASH_A], { apiKey: "k" })).rejects.toBeInstanceOf(
+			UpstreamParseError,
+		);
+	});
+
+	it("never leaks the api key, hashes, or auth header in thrown errors", async () => {
+		interceptCheckCached(502, "Bad Gateway");
+		const apiKey = "super-secret-torbox-key";
+		let err: unknown = null;
+		try {
+			await checkTorrentCache([HASH_A], { apiKey });
+		} catch (e) {
+			err = e;
+		}
+		const text = err instanceof Error ? `${err.name} ${err.message}` : String(err);
+		expect(text).not.toContain(apiKey);
+		expect(text).not.toContain(HASH_A);
+		expect(text).not.toContain("Bearer");
+		expect(text).not.toContain("authorization");
+	});
+
+	it("never logs the api key, hashes, or auth header on failure", async () => {
+		interceptCheckCached(500, "boom");
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const apiKey = "logged-secret-key";
+		try {
+			await checkTorrentCache([HASH_A], { apiKey }).catch(() => {});
+		} finally {
+			warnSpy.mockRestore();
+		}
+		const logged = JSON.stringify(warnSpy.mock.calls);
+		expect(logged).not.toContain(apiKey);
+		expect(logged).not.toContain(HASH_A);
+		expect(logged).not.toContain("Bearer");
 	});
 });

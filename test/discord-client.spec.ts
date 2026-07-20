@@ -105,6 +105,20 @@ describe("/search select menu payload", () => {
 			.reply(200, PROWLARR_TWO_ITEM_JSON, {
 				headers: { "content-type": "application/json" },
 			});
+		// Best-effort TorBox cache check: nothing cached (data: null) so no
+		// badges are appended and the descriptions stay unchanged.
+		fetchMock
+			.get("https://api.torbox.app")
+			.intercept({ path: /\/v1\/api\/torrents\/checkcached/, method: "POST" })
+			.reply(
+				200,
+				JSON.stringify({
+					success: true,
+					error: null,
+					detail: "Torrent cache status retrieved successfully.",
+					data: null,
+				}),
+			);
 		const { captured } = interceptOriginalResponseEdit();
 
 		const { ctx, response } = await dispatchInteraction(

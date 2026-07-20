@@ -26,4 +26,11 @@ export interface TorrentResult {
 	magnetUri: string | null;
 	/** Publication date as reported by the backend (raw string). */
 	publishedAt: string | null;
+	/**
+	 * Advisory TorBox cache availability for this result's info hash, set
+	 * by the `/search` flow after a best-effort batch cache check. True
+	 * only when TorBox reports the hash as cached; undefined for uncached,
+	 * unknown, or unchecked results. Never populated by search backends.
+	 */
+	isCached?: boolean;
 }

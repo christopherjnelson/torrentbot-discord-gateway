@@ -28,6 +28,9 @@ import { sanitizeInline } from "../utils/format";
 export const TORBOX_API_BASE = "https://api.torbox.app/v1/api";
 const TORBOX_SERVICE = "torbox" as const;
 
+/** A valid 40-character hexadecimal BitTorrent v1 info hash. */
+const INFO_HASH_PATTERN = /^[a-fA-F0-9]{40}$/;
+
 export interface TorboxClientOptions {
 	apiKey: string;
 	timeoutMs?: number;
@@ -332,6 +335,114 @@ export async function findTorrentByHash(
 	return (
 		torrents.find((torrent) => torrent.hash.toLowerCase() === needle) ?? null
 	);
+}
+
+/**
+ * Check which of the given info hashes are already cached on TorBox.
+ * POST /torrents/checkcached (JSON body `{ hashes: [...] }`, format=object).
+ *
+ * Verified behavior (official TorBox OpenAPI spec + the Postman
+ * collection at api-docs.torbox.app, 2026-07-20):
+ * - Auth is the API key in the `Authorization: Bearer …` header (same as
+ *   every other endpoint).
+ * - The batch endpoint accepts the hashes as a JSON `{ hashes: [...] }`
+ *   body and a `format` query parameter (`"object"` default, `"list"`).
+ * - With `format=object`, `data` is a map keyed by hash; a hash present in
+ *   `data` IS cached. Uncached/unknown hashes are simply absent — the
+ *   documented "Success Uncached" example returns `data: null`.
+ * - Hashes are matched case-insensitively (lowercased here and on lookup).
+ * - Empty input makes no request and returns an empty set.
+ *
+ * Security: hashes travel in the request body (never the URL), and the
+ * API key travels only in the Authorization header. The request URL, the
+ * raw response, and individual hashes are never logged here; thrown
+ * errors are the normalized Upstream* types, which never carry URLs,
+ * hashes, or credentials.
+ *
+ * Throws Upstream* errors on HTTP/auth/parse failures; the caller is
+ * expected to degrade gracefully (cache status is advisory).
+ */
+export async function checkTorrentCache(
+	infoHashes: readonly string[],
+	options: TorboxClientOptions,
+): Promise<Set<string>> {
+	const normalized = new Set<string>();
+	for (const raw of infoHashes) {
+		if (typeof raw !== "string") {
+			continue;
+		}
+		const hash = raw.trim().toLowerCase();
+		if (INFO_HASH_PATTERN.test(hash)) {
+			normalized.add(hash);
+		}
+	}
+	if (normalized.size === 0) {
+		return new Set();
+	}
+
+	const url = new URL(`${TORBOX_API_BASE}/torrents/checkcached`);
+	url.searchParams.set("format", "object");
+
+	const { status, body } = await fetchText(url.toString(), {
+		service: TORBOX_SERVICE,
+		method: "POST",
+		headers: {
+			authorization: `Bearer ${options.apiKey}`,
+			"content-type": "application/json",
+		},
+		body: JSON.stringify({ hashes: [...normalized] }),
+		timeoutMs: options.timeoutMs,
+	});
+
+	const envelope = parseEnvelopeLenient(body, status);
+
+	if (status !== 200 || !envelope || !envelope.success) {
+		throwForFailure(envelope, status);
+	}
+
+	return parseCachedHashes(envelope.data);
+}
+
+/**
+ * Extract the set of cached (lowercased) info hashes from a checkcached
+ * `data` payload. Tolerates the documented `object` shape (a map keyed by
+ * hash), the `list` shape (an array of `{ hash }` entries), `null` (no
+ * cached hashes), and malformed/partial entries (skipped). An unexpected
+ * data shape is treated as "no cached hashes" rather than failing, so
+ * cache enrichment stays advisory.
+ */
+function parseCachedHashes(data: unknown): Set<string> {
+	const cached = new Set<string>();
+	if (data === null || data === undefined) {
+		return cached;
+	}
+	if (isRecord(data)) {
+		for (const key of Object.keys(data)) {
+			if (INFO_HASH_PATTERN.test(key)) {
+				cached.add(key.toLowerCase());
+				continue;
+			}
+			const entry = data[key];
+			if (isRecord(entry)) {
+				const hash = asString(entry.hash);
+				if (hash && INFO_HASH_PATTERN.test(hash)) {
+					cached.add(hash.toLowerCase());
+				}
+			}
+		}
+		return cached;
+	}
+	if (Array.isArray(data)) {
+		for (const entry of data) {
+			if (isRecord(entry)) {
+				const hash = asString(entry.hash);
+				if (hash && INFO_HASH_PATTERN.test(hash)) {
+					cached.add(hash.toLowerCase());
+				}
+			}
+		}
+	}
+	return cached;
 }
 
 export interface RequestDownloadLinkOptions extends TorboxClientOptions {

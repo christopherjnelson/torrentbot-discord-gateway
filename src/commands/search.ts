@@ -10,17 +10,27 @@ import {
 	type DiscordInteraction,
 } from "../discord/types";
 import { searchProwlarr } from "../services/prowlarr";
+import { checkTorrentCache } from "../services/torbox";
 import type { TorrentResult } from "../types/search";
 import {
 	formatBytes,
 	sanitizeInline,
+	truncate,
 } from "../utils/format";
 import { logUpstreamFailure, upstreamErrorMessage } from "./shared";
 import { buildSearchComponents } from "./component";
+import {
+	isValidInfoHash,
+	SELECT_OPTION_CAP,
+} from "../utils/signing";
 
 export const SEARCH_COMMAND_NAME = "search";
 export const MAX_SEARCH_RESULTS = 5;
 const MAX_QUERY_LENGTH = 200;
+/** Discord select-option description hard limit. */
+const DESCRIPTION_LIMIT = 100;
+/** Cache badge appended to a cached result's option description. */
+const CACHE_BADGE = "⚡ Cached";
 
 /**
  * Validate the required `query` option. Returns null when missing, empty,
@@ -39,7 +49,10 @@ export function extractSearchQuery(
 /**
  * Build the concise option description for a search result:
  *   <size> • <n> seeds • <source>
- * Missing metadata is omitted (never replaced with a placeholder).
+ * Missing metadata is omitted (never replaced with a placeholder). When
+ * TorBox reports the result's hash as cached, a `⚡ Cached` badge is
+ * appended. The final description is truncated to the Discord select
+ * option limit of 100 characters; the badge alone is a valid description.
  */
 export function formatResultDescription(result: TorrentResult): string {
 	const parts: string[] = [];
@@ -55,7 +68,12 @@ export function formatResultDescription(result: TorrentResult): string {
 		parts.push(sanitizeInline(result.source, 30));
 	}
 
-	return parts.join(" • ");
+	let description = parts.join(" • ");
+	if (result.isCached) {
+		description =
+			description.length > 0 ? `${description} • ${CACHE_BADGE}` : CACHE_BADGE;
+	}
+	return truncate(description, DESCRIPTION_LIMIT);
 }
 
 /**
@@ -74,6 +92,63 @@ export function formatSearchResults(
 	}
 
 	return `Choose a release for **${safeQuery}**:`;
+}
+
+/**
+ * Annotate the selectable search results with TorBox cache status using a
+ * single batch cache-check request. Best-effort and advisory only:
+ * - skipped entirely when TorBox is not configured or no selectable
+ *   result carries a valid info hash (no request is made);
+ * - on any failure (HTTP, auth, parse, network) logs a concise sanitized
+ *   warning and leaves results unchanged, so `/search` still returns the
+ *   Prowlarr results without cache badges.
+ *
+ * The selectable set mirrors the select menu (valid-hash results, capped
+ * to SELECT_OPTION_CAP) so at most one cache request is made for up to
+ * five results. Hashes are matched case-insensitively. No torrent is
+ * submitted to TorBox and the account is never mutated.
+ */
+async function enrichWithCacheStatus(
+	results: TorrentResult[],
+	config: AppConfig,
+): Promise<void> {
+	if (!config.torboxApiKey) {
+		return;
+	}
+	const selectableHashes: string[] = [];
+	for (const result of results) {
+		if (result.infoHash && isValidInfoHash(result.infoHash)) {
+			selectableHashes.push(result.infoHash);
+		}
+		if (selectableHashes.length >= SELECT_OPTION_CAP) {
+			break;
+		}
+	}
+	if (selectableHashes.length === 0) {
+		return;
+	}
+
+	let cached: Set<string>;
+	try {
+		cached = await checkTorrentCache(selectableHashes, {
+			apiKey: config.torboxApiKey,
+			timeoutMs: config.upstreamTimeoutMs,
+		});
+	} catch (error) {
+		logUpstreamFailure("torbox cache check failed", error);
+		return;
+	}
+
+	if (cached.size === 0) {
+		return;
+	}
+	for (const result of results) {
+		if (result.infoHash && isValidInfoHash(result.infoHash)) {
+			if (cached.has(result.infoHash.toLowerCase())) {
+				result.isCached = true;
+			}
+		}
+	}
 }
 
 async function completeSearch(
@@ -96,6 +171,11 @@ async function completeSearch(
 			limit: MAX_SEARCH_RESULTS,
 		});
 		content = formatSearchResults(query, results);
+
+		// Best-effort TorBox cache enrichment of the selectable results
+		// (one batch request). Any failure logs a sanitized warning and
+		// leaves results unchanged (no badges); /search still succeeds.
+		await enrichWithCacheStatus(results, config);
 
 		// Build select menu if signing is configured and there are selectable results.
 		if (config.componentSigningSecret) {
