@@ -1,5 +1,13 @@
 import { fetchMock, waitOnExecutionContext } from "cloudflare:test";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+	afterAll,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import { PROWLARR_EMPTY_JSON, PROWLARR_TWO_ITEM_JSON } from "./fixtures";
 import {
 	dispatchInteraction,
@@ -682,6 +690,100 @@ describe("/search TorBox cache enrichment", () => {
 		}
 		// The badge only ever appears inside option descriptions.
 		expect(visible).toContain("⚡ Cached");
+	});
+
+	it("does not crash the Worker when the final /search edit is rejected", async () => {
+		mockProwlarr(200, PROWLARR_TWO_ITEM_JSON);
+		// Best-effort cache check: nothing cached.
+		fetchMock
+			.get("https://api.torbox.app")
+			.intercept({ path: /\/v1\/api\/torrents\/checkcached/, method: "POST" })
+			.reply(
+				200,
+				JSON.stringify({
+					success: true,
+					error: null,
+					detail: "Torrent cache status retrieved successfully.",
+					data: null,
+				}),
+			);
+		// The final editOriginalResponse is rejected by Discord (400).
+		fetchMock
+			.get("https://discord.com")
+			.intercept({
+				path: (p) =>
+					p.includes("/webhooks/") && p.endsWith("/messages/@original"),
+				method: "PATCH",
+			})
+			.reply(
+				400,
+				JSON.stringify({
+					code: 50035,
+					message: "Invalid Form Body",
+					errors: {
+						data: {
+							components: {
+								"0": {
+									components: {
+										"0": {
+											options: {
+												"0": {
+													value: {
+														_errors: [
+															{
+																code: "BASE_TYPE_MAX_LENGTH",
+																message:
+																	"Must be 100 or fewer in length.",
+															},
+														],
+													},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				}),
+			);
+
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		try {
+			const { ctx, response } = await dispatchInteraction(
+				JSON.stringify(
+					makeCommandInteraction("search", [
+						{ name: "query", type: 3, value: "grogu" },
+					]),
+				),
+				{ COMPONENT_SIGNING_SECRET: "test-signing-secret-32-bytes-long!" },
+			);
+
+			// The initial defer still succeeds (HTTP 200, type 5).
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({ type: 5 });
+
+			// The background phase must not throw or reject the Worker.
+			await waitOnExecutionContext(ctx);
+
+			// The structured Discord diagnostics are logged exactly once.
+			expect(warnSpy.mock.calls).toHaveLength(1);
+			const [context, diag] = warnSpy.mock.calls[0] as [
+				string,
+				Record<string, unknown>,
+			];
+			expect(context).toBe("failed to edit interaction response");
+			expect(diag).toMatchObject({ status: 400, code: 50035 });
+			expect(Array.isArray(diag.fieldErrors)).toBe(true);
+
+			// No secrets leak into the logs.
+			const logged = JSON.stringify(warnSpy.mock.calls);
+			expect(logged).not.toContain(TEST_INTERACTION_TOKEN);
+			expect(logged).not.toContain("magnet:?xt");
+		} finally {
+			warnSpy.mockRestore();
+		}
 	});
 
 	it("keeps option descriptions within Discord's 100-char limit", async () => {

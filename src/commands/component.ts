@@ -7,7 +7,6 @@ import {
 import {
 	createFollowupMessage,
 	editFollowupMessage,
-	DiscordApiError,
 } from "../discord/client";
 import {
 	messageResponse,
@@ -37,6 +36,7 @@ import { formatBytes, sanitizeInline } from "../utils/format";
 import type { TorrentResult } from "../types/search";
 import { formatResultDescription } from "./search";
 import {
+	logDiscordApiFailure,
 	logUpstreamFailure,
 	upstreamErrorMessage,
 } from "./shared";
@@ -45,6 +45,7 @@ import {
 	createPayload,
 	buildCustomId,
 	DISCORD_ID_LIMIT,
+	isValidInfoHash,
 	MAX_SELECT_OPTIONS,
 	SELECT_OPTION_CAP,
 } from "../utils/signing";
@@ -89,7 +90,7 @@ export async function handleComponentInteraction(
 
 	// Get the selected info hash from the option value first (quick validation).
 	const selectedHash = data.values?.[0];
-	if (!selectedHash || !isValidHash(selectedHash)) {
+	if (!selectedHash || !isValidInfoHash(selectedHash)) {
 		return messageResponse(
 			"Invalid selection. Please try again.",
 			true,
@@ -142,20 +143,6 @@ export async function handleComponentInteraction(
 	return updateMessageResponse({ components: [] });
 }
 
-/** Log a Discord follow-up failure with only sanitized diagnostics. */
-function logDiscordEditFailure(error: unknown): void {
-	if (error instanceof DiscordApiError) {
-		console.warn("failed to edit interaction response: discord API error", {
-			status: error.status,
-			code: error.code,
-			message: error.discordMessage,
-			fieldErrors: error.fieldErrors,
-		});
-		return;
-	}
-	logUpstreamFailure("failed to edit interaction response", error);
-}
-
 /**
  * Background phase: post an ephemeral progress message, run the TorBox
  * flow, and edit the progress message with the final result. Every branch
@@ -175,7 +162,7 @@ async function processComponentInteraction(
 			{ content: "Adding to TorBox..." },
 		);
 	} catch (error) {
-		logDiscordEditFailure(error);
+		logDiscordApiFailure("failed to edit interaction response", error);
 		return;
 	}
 
@@ -189,7 +176,7 @@ async function processComponentInteraction(
 			{ content },
 		);
 	} catch (error) {
-		logDiscordEditFailure(error);
+		logDiscordApiFailure("failed to edit interaction response", error);
 	}
 }
 
@@ -318,19 +305,67 @@ async function addAndAwaitDownload(
 }
 
 /**
- * Build select menu components for search results.
- * Returns null if no results have valid info hashes.
+ * Build select menu components for the already-normalized selectable
+ * search results.
+ *
+ * The caller (`completeSearch`) is responsible for producing the
+ * selectable set via `buildSelectableOptions(results, SELECT_OPTION_CAP)`,
+ * which deduplicates by normalized info hash, drops empty-label results,
+ * and caps at five. This function keeps only defensive validation so a
+ * malformed payload can never reach Discord:
+ * - option label non-empty and <= 100 chars
+ * - option value a valid 40-char BTIH hash and <= 100 chars
+ * - optional description omitted when empty and <= 100 chars
+ * - no more than five options
+ * - custom_id <= 100 chars
+ *
+ * Returns null if the selectable set is empty.
  */
 export async function buildSearchComponents(
-	results: readonly TorrentResult[],
+	selectable: readonly TorrentResult[],
 	userId: string,
 	signingSecret: string,
 ): Promise<object[] | null> {
-	const selectable = results
-		.filter((r) => r.infoHash && isValidHash(r.infoHash))
-		.slice(0, SELECT_OPTION_CAP);
+	// Defensive: re-deduplicate in case a caller bypassed the normal path.
+	const seen = new Set<string>();
+	const options: {
+		label: string;
+		value: string;
+		description?: string;
+	}[] = [];
+	for (const result of selectable) {
+		if (options.length >= SELECT_OPTION_CAP) {
+			break;
+		}
+		const value = result.infoHash;
+		if (typeof value !== "string" || !isValidInfoHash(value)) {
+			continue;
+		}
+		const key = value.toLowerCase();
+		if (seen.has(key)) {
+			continue;
+		}
+		seen.add(key);
 
-	if (selectable.length === 0) {
+		const label = sanitizeInline(result.title, 100);
+		if (label.length === 0) {
+			continue;
+		}
+		if (label.length > DISCORD_ID_LIMIT) {
+			throw new Error("select option label exceeds Discord 100-char limit");
+		}
+		if (value.length > DISCORD_ID_LIMIT) {
+			throw new Error("select option value exceeds Discord 100-char limit");
+		}
+		const description = formatResultDescription(result);
+		options.push({
+			label,
+			value,
+			description: description.length > 0 ? description : undefined,
+		});
+	}
+
+	if (options.length === 0) {
 		return null;
 	}
 
@@ -338,26 +373,6 @@ export async function buildSearchComponents(
 	// interaction to the original requester and includes an expiry.
 	const payload = createPayload(userId, ""); // hash not needed in custom_id
 	const customId = await buildCustomId(payload, signingSecret);
-
-	// Each option's value is the info hash directly. The custom_id signature
-	// validates the user and expiry; the option value is validated as a
-	// proper info hash before use.
-		const options = selectable.map((result) => {
-			const rawLabel = sanitizeInline(result.title, 100);
-			const value = result.infoHash as string;
-			if (value.length > DISCORD_ID_LIMIT) {
-				throw new Error("select option value exceeds Discord 100-char limit");
-			}
-			if (rawLabel.length > DISCORD_ID_LIMIT) {
-				throw new Error("select option label exceeds Discord 100-char limit");
-			}
-			const description = formatResultDescription(result);
-			return {
-				label: rawLabel,
-				value,
-				description: description.length > 0 ? description : undefined,
-			};
-		});
 
 	// Fail-safe invariant checks before sending to Discord.
 	if (customId.length > DISCORD_ID_LIMIT) {
@@ -383,8 +398,4 @@ export async function buildSearchComponents(
 			],
 		},
 	];
-}
-
-function isValidHash(hash: string): boolean {
-	return /^[a-fA-F0-9]{40}$/.test(hash);
 }

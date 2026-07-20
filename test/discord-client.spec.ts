@@ -6,6 +6,7 @@ import {
 	interceptOriginalResponseEdit,
 	makeCommandInteraction,
 	makeComponentInteraction,
+	TEST_INTERACTION_TOKEN,
 	TEST_USER_ID,
 } from "./helpers";
 import { PROWLARR_TWO_ITEM_JSON, TEST_SIGNING_SECRET } from "./fixtures";
@@ -232,12 +233,28 @@ describe("Discord edit error diagnostics", () => {
 		expect((await response.json() as any).type).toBe(7);
 		await waitOnExecutionContext(ctx);
 
+		// The new shared helper logs the context string plus a structured
+		// object carrying only status/code/discordMessage/fieldErrors.
+		expect(warnSpy.mock.calls).toHaveLength(1);
+		const [context, diag] = warnSpy.mock.calls[0] as [
+			string,
+			Record<string, unknown>,
+		];
+		expect(context).toBe("failed to edit interaction response");
+		expect(diag).toMatchObject({
+			status: 400,
+			code: 50035,
+			discordMessage: "Invalid Form Body",
+		});
+		expect(Array.isArray(diag.fieldErrors)).toBe(true);
+		expect((diag.fieldErrors as string[]).join("|")).toContain(
+			"data.components",
+		);
+
 		const logged = JSON.stringify(warnSpy.mock.calls);
-		expect(logged).toContain("discord API error");
-		expect(logged).toContain(50035);
-		expect(logged).toContain("data.components");
-		// The signed custom_id (derived from the user id) must not appear.
+		// No secrets in the logs: no token, no signed custom_id.
 		expect(logged).not.toContain(customId);
+		expect(logged).not.toContain(TEST_INTERACTION_TOKEN);
 		warnSpy.mockRestore();
 	});
 });

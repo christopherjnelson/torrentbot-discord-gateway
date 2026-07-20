@@ -1,4 +1,7 @@
-import { editOriginalResponse } from "../discord/client";
+import {
+	DiscordApiError,
+	editOriginalResponse,
+} from "../discord/client";
 import type { DiscordInteraction } from "../discord/types";
 import {
 	UpstreamApiError,
@@ -50,6 +53,36 @@ export function logUpstreamFailure(context: string, error: unknown): void {
 }
 
 /**
+ * Log a Discord REST failure with sanitized structured diagnostics.
+ *
+ * When `error` is a {@link DiscordApiError}, logs a structured object
+ * containing only the safe fields Discord's normalized error already
+ * carries: `status`, `code`, `discordMessage`, and `fieldErrors`. These
+ * never include webhook URLs, interaction tokens, custom IDs, option
+ * values, hashes, magnets, API keys, request bodies, or raw Discord
+ * response bodies — the `DiscordApiError` class enforces that at the
+ * boundary.
+ *
+ * For any other error, falls back to the classification-only
+ * {@link logUpstreamFailure} so no upstream payload can leak.
+ */
+export function logDiscordApiFailure(
+	context: string,
+	error: unknown,
+): void {
+	if (error instanceof DiscordApiError) {
+		console.warn(context, {
+			status: error.status,
+			code: error.code,
+			discordMessage: error.discordMessage,
+			fieldErrors: error.fieldErrors,
+		});
+		return;
+	}
+	logUpstreamFailure(context, error);
+}
+
+/**
  * Edit the original interaction response, swallowing follow-up failures
  * (there is nothing more we can do if Discord rejects the edit).
  */
@@ -62,6 +95,6 @@ export async function safeEditOriginal(
 			content,
 		});
 	} catch (error) {
-		logUpstreamFailure("failed to edit interaction response", error);
+		logDiscordApiFailure("failed to edit interaction response", error);
 	}
 }

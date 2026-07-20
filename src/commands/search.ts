@@ -17,12 +17,17 @@ import {
 	sanitizeInline,
 	truncate,
 } from "../utils/format";
-import { logUpstreamFailure, upstreamErrorMessage } from "./shared";
+import {
+	logDiscordApiFailure,
+	logUpstreamFailure,
+	upstreamErrorMessage,
+} from "./shared";
 import { buildSearchComponents } from "./component";
 import {
 	isValidInfoHash,
 	SELECT_OPTION_CAP,
 } from "../utils/signing";
+import { buildSelectableOptions } from "../utils/selectable";
 
 export const SEARCH_COMMAND_NAME = "search";
 export const MAX_SEARCH_RESULTS = 5;
@@ -97,33 +102,28 @@ export function formatSearchResults(
 /**
  * Annotate the selectable search results with TorBox cache status using a
  * single batch cache-check request. Best-effort and advisory only:
- * - skipped entirely when TorBox is not configured or no selectable
- *   result carries a valid info hash (no request is made);
+ * - skipped entirely when TorBox is not configured or the selectable set
+ *   is empty (no request is made);
  * - on any failure (HTTP, auth, parse, network) logs a concise sanitized
  *   warning and leaves results unchanged, so `/search` still returns the
  *   Prowlarr results without cache badges.
  *
- * The selectable set mirrors the select menu (valid-hash results, capped
- * to SELECT_OPTION_CAP) so at most one cache request is made for up to
- * five results. Hashes are matched case-insensitively. No torrent is
- * submitted to TorBox and the account is never mutated.
+ * The caller passes the exact selectable set that will be rendered in the
+ * select menu (valid-hash, deduplicated, label-filtered, capped to
+ * SELECT_OPTION_CAP), so the cache check, annotation, and menu all
+ * operate on the same results. Hashes are matched case-insensitively. No
+ * torrent is submitted to TorBox and the account is never mutated.
  */
 async function enrichWithCacheStatus(
-	results: TorrentResult[],
+	selectable: TorrentResult[],
 	config: AppConfig,
 ): Promise<void> {
-	if (!config.torboxApiKey) {
+	if (!config.torboxApiKey || selectable.length === 0) {
 		return;
 	}
-	const selectableHashes: string[] = [];
-	for (const result of results) {
-		if (result.infoHash && isValidInfoHash(result.infoHash)) {
-			selectableHashes.push(result.infoHash);
-		}
-		if (selectableHashes.length >= SELECT_OPTION_CAP) {
-			break;
-		}
-	}
+	const selectableHashes = selectable
+		.map((r) => r.infoHash)
+		.filter((h): h is string => typeof h === "string" && isValidInfoHash(h));
 	if (selectableHashes.length === 0) {
 		return;
 	}
@@ -142,7 +142,7 @@ async function enrichWithCacheStatus(
 	if (cached.size === 0) {
 		return;
 	}
-	for (const result of results) {
+	for (const result of selectable) {
 		if (result.infoHash && isValidInfoHash(result.infoHash)) {
 			if (cached.has(result.infoHash.toLowerCase())) {
 				result.isCached = true;
@@ -172,17 +172,24 @@ async function completeSearch(
 		});
 		content = formatSearchResults(query, results);
 
+		// Single authoritative selectable sequence:
+		// Prowlarr results -> valid hashes -> deduplicate by normalized
+		// hash -> remove unusable labels -> continue scanning until five
+		// valid options. The cache check, annotation, and menu all use
+		// this exact array.
+		const selectable = buildSelectableOptions(results, SELECT_OPTION_CAP);
+
 		// Best-effort TorBox cache enrichment of the selectable results
 		// (one batch request). Any failure logs a sanitized warning and
 		// leaves results unchanged (no badges); /search still succeeds.
-		await enrichWithCacheStatus(results, config);
+		await enrichWithCacheStatus(selectable, config);
 
 		// Build select menu if signing is configured and there are selectable results.
 		if (config.componentSigningSecret) {
 			const userId = getInvokerId(interaction);
 			if (userId) {
 				components = await buildSearchComponents(
-					results,
+					selectable,
 					userId,
 					config.componentSigningSecret,
 				);
@@ -200,7 +207,7 @@ async function completeSearch(
 			{ content, components: components ?? undefined },
 		);
 	} catch (error) {
-		logUpstreamFailure("failed to edit interaction response", error);
+		logDiscordApiFailure("failed to edit interaction response", error);
 	}
 }
 
