@@ -206,7 +206,7 @@ Fill in `.dev.vars` (never commit it — it is git-ignored):
 | `INTERNAL_API_TOKEN` | secret | Bearer token for `/api/*` (generate a long random string) |
 | `COMPONENT_SIGNING_SECRET` | secret | HMAC-SHA-256 signing for Discord component interactions (generate with `openssl rand -hex 32`) |
 | `PROWLARR_URL` | var | Prowlarr base URL (set in `wrangler.jsonc`; `.dev.vars` overrides locally) |
-| `TORBOX_ALLOWED_GUILD_IDS` | var | Comma-separated Discord guild (server) IDs whose members may run `/search`, `/add`, `/status`, and the search-result selection flow (each entry must be a snowflake-style decimal string; empty means nobody is authorized) |
+| `TORBOX_ALLOWED_GUILD_IDS` | secret | Comma-separated Discord guild (server) IDs whose members may run `/search`, `/add`, `/status`, and the search-result selection flow (each entry must be a snowflake-style decimal string; missing/empty/malformed denies all Discord TorBox access). Treated as a secret so real guild IDs stay out of tracked files |
 | `UPSTREAM_TIMEOUT_MS` | var | Optional upstream timeout override (default `10000`) |
 | `TORBOX_POLL_INTERVAL_MS` | var | Optional delay between TorBox readiness polls after a selection (default `2500`, range 250–10000) |
 | `TORBOX_POLL_MAX_ATTEMPTS` | var | Optional cap on TorBox readiness polls after a selection (default `7`, range 1–20) |
@@ -221,6 +221,7 @@ npx wrangler secret put PROWLARR_API_KEY
 npx wrangler secret put TORBOX_API_KEY
 npx wrangler secret put INTERNAL_API_TOKEN
 npx wrangler secret put COMPONENT_SIGNING_SECRET
+npx wrangler secret put TORBOX_ALLOWED_GUILD_IDS
 ```
 
 The `COMPONENT_SIGNING_SECRET` is used to sign and verify Discord component
@@ -230,14 +231,18 @@ interaction payloads (the select menu in `/search` results). Generate it with:
 openssl rand -hex 32
 ```
 
+`TORBOX_ALLOWED_GUILD_IDS` is a comma-separated list of Discord guild (server)
+IDs; every member of an approved guild can use `/search`, `/add`, `/status`,
+and the search-result selection flow. Enter multiple IDs as a single
+comma-separated value (e.g. `123456789012345678,987654321098765432`). Each
+entry must be a snowflake-style decimal string; missing/empty/malformed
+configuration denies all Discord TorBox access. It is a Worker secret (not a
+`wrangler.jsonc` var) so real guild IDs never land in tracked files. Direct
+messages are not supported.
+
 Non-secret vars live in `wrangler.jsonc` (`PROWLARR_URL`,
-`TORBOX_ALLOWED_GUILD_IDS`, `UPSTREAM_TIMEOUT_MS`, `TORBOX_POLL_INTERVAL_MS`,
-`TORBOX_POLL_MAX_ATTEMPTS`) and can be edited there or in the Cloudflare
-dashboard. `TORBOX_ALLOWED_GUILD_IDS` is a comma-separated list of Discord
-guild (server) IDs; every member of an approved guild can use `/search`,
-`/add`, `/status`, and the search-result selection flow. Direct messages
-are not supported. Use placeholders only — never commit a real guild ID to
-tracked files.
+`UPSTREAM_TIMEOUT_MS`, `TORBOX_POLL_INTERVAL_MS`, `TORBOX_POLL_MAX_ATTEMPTS`)
+and can be edited there or in the Cloudflare dashboard.
 
 ### 6. Register the Discord commands
 
@@ -430,21 +435,23 @@ responses never include download URLs, file lists, or server paths.
   `PROWLARR_API_KEY` is wrong or was rotated; copy the current key from
   Prowlarr → Settings → General → Security → API Key.
 - **`/add` says "TorrentBot is not enabled for this server"**: the
-  interaction's guild is not listed in `TORBOX_ALLOWED_GUILD_IDS` (var,
-  comma-separated snowflake IDs). Add the guild ID and redeploy. Direct
+  interaction's guild is not listed in `TORBOX_ALLOWED_GUILD_IDS` (secret,
+  comma-separated snowflake IDs). Add the guild ID with
+  `npx wrangler secret put TORBOX_ALLOWED_GUILD_IDS` and redeploy. Direct
   messages are not supported.
 - **"TorrentBot authorization is not configured correctly"**:
   `TORBOX_ALLOWED_GUILD_IDS` is missing, empty, or contains a malformed
-  (non-snowflake) entry; the bot fails closed. Fix the value in
-  `wrangler.jsonc` (or the Cloudflare dashboard) and redeploy.
+  (non-snowflake) entry; the bot fails closed. Set a valid comma-separated
+  value with `npx wrangler secret put TORBOX_ALLOWED_GUILD_IDS` and redeploy.
 
 ## Remaining manual steps
 
 1. Create the Discord application/guild, Prowlarr instance, and TorBox
    account (above).
 2. Add real IDs and API keys to `.dev.vars`.
-3. Add production secrets (`wrangler secret put …`) and review
-   `wrangler.jsonc` vars (`PROWLARR_URL` in particular).
+3. Add production secrets (`wrangler secret put …`, including
+   `TORBOX_ALLOWED_GUILD_IDS`) and review `wrangler.jsonc` vars
+   (`PROWLARR_URL` in particular).
 4. Run `npm run discord:register` (re-run it after pulling changes that
    touch `scripts/register-commands.mjs`).
 5. Run `npm run deploy`.

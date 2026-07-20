@@ -10,15 +10,16 @@
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
-	// Non-secret configuration. Comma-separated Discord guild (server) IDs
-	// whose members may run /search, /add, /status, and the search-result
-	// selection flow. Empty means nobody is authorized. Each entry must be
-	// a snowflake-style decimal string. PROWLARR_URL is the base URL of the
-	// Prowlarr instance backing /search and /api/search. TORBOX_POLL_*
-	// bound the readiness check after adding a torrent
+	// Non-secret configuration. PROWLARR_URL is the base URL of the Prowlarr
+	// instance backing /search and /api/search. TORBOX_POLL_* bound the
+	// readiness check after adding a torrent
 	// (maxAttempts x intervalMs ~= 15-20s total).
+	//
+	// TORBOX_ALLOWED_GUILD_IDS is intentionally NOT a var here: it is a
+	// secret binding (see `secrets` below) so that real guild IDs never
+	// land in tracked files. Set it with
+	// `npx wrangler secret put TORBOX_ALLOWED_GUILD_IDS` (comma-separated).
 	"vars": {
-		"TORBOX_ALLOWED_GUILD_IDS": "",
 		"UPSTREAM_TIMEOUT_MS": "10000",
 		"PROWLARR_URL": "https://prowlarr.chris.guru",
 		"TORBOX_POLL_INTERVAL_MS": "2500",
@@ -26,13 +27,18 @@
 	},
 	// Secret bindings the Worker reads at runtime. Set values with
 	// `wrangler secret put <NAME>` (production) or in `.dev.vars` (local dev).
+	// TORBOX_ALLOWED_GUILD_IDS is an optional comma-separated list of Discord
+	// guild (server) IDs whose members may run /search, /add, /status, and
+	// the search-result selection flow. Each entry must be a snowflake-style
+	// decimal string. Missing/empty/malformed denies all Discord TorBox access.
 	"secrets": {
 		"required": [
 			"DISCORD_PUBLIC_KEY",
 			"PROWLARR_API_KEY",
 			"TORBOX_API_KEY",
 			"INTERNAL_API_TOKEN",
-			"COMPONENT_SIGNING_SECRET"
+			"COMPONENT_SIGNING_SECRET",
+			"TORBOX_ALLOWED_GUILD_IDS"
 		]
 	}
 }

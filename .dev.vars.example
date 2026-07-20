@@ -18,9 +18,12 @@ PROWLARR_API_KEY=replace-me
 TORBOX_API_KEY=replace-me
 # Bearer token required for the internal /api/* routes (generate a long random string)
 INTERNAL_API_TOKEN=replace-me
-# Non-secret: comma-separated Discord guild (server) IDs whose members may run
-# /search, /add, /status, and the search-result selection flow. Each entry
-# must be a snowflake-style decimal string. Empty means nobody is authorized.
+# Comma-separated Discord guild (server) IDs whose members may run /search,
+# /add, /status, and the search-result selection flow. Each entry must be a
+# snowflake-style decimal string. Missing/empty/malformed denies all Discord
+# TorBox access. Treated as a Worker secret so real guild IDs stay out of
+# tracked files; set the production value with
+# `npx wrangler secret put TORBOX_ALLOWED_GUILD_IDS`.
 TORBOX_ALLOWED_GUILD_IDS=
 # Secret used to sign Discord component payloads (generate with: openssl rand -hex 32)
 COMPONENT_SIGNING_SECRET=replace-me
