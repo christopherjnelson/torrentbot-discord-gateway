@@ -12,11 +12,8 @@ import {
 import { searchProwlarr } from "../services/prowlarr";
 import type { TorrentResult } from "../types/search";
 import {
-	categoryName,
-	DISCORD_CONTENT_LIMIT,
 	formatBytes,
 	sanitizeInline,
-	truncate,
 } from "../utils/format";
 import { logUpstreamFailure, upstreamErrorMessage } from "./shared";
 import { buildSearchComponents } from "./component";
@@ -39,33 +36,32 @@ export function extractSearchQuery(
 	return raw;
 }
 
-function formatResultLine(result: TorrentResult, index: number): string {
-	const parts: string[] = [formatBytes(result.sizeBytes)];
+/**
+ * Build the concise option description for a search result:
+ *   <size> • <n> seeds • <source>
+ * Missing metadata is omitted (never replaced with a placeholder).
+ */
+export function formatResultDescription(result: TorrentResult): string {
+	const parts: string[] = [];
 
+	const size = formatBytes(result.sizeBytes);
+	if (result.sizeBytes !== null && result.sizeBytes >= 0) {
+		parts.push(size);
+	}
 	if (result.seeders !== null) {
 		parts.push(`${result.seeders} seeds`);
-	}
-	const category = categoryName(result.categoryId);
-	if (category) {
-		parts.push(category);
 	}
 	if (result.source) {
 		parts.push(sanitizeInline(result.source, 30));
 	}
-	if (result.magnetUri) {
-		parts.push("magnet ✓");
-	} else if (result.infoHash) {
-		parts.push("hash ✓");
-	}
 
-	const title = sanitizeInline(result.title, 120);
-	return `**${index + 1}.** \`${title}\` — ${parts.join(" · ")}`;
+	return parts.join(" • ");
 }
 
 /**
- * Build the Discord message for a set of results. Guaranteed to fit within
- * Discord's 2000-character content limit. Magnet URIs and info hashes are
- * never included — availability markers only.
+ * Build the concise Discord message for a set of results: a single heading
+ * with the search query and no duplicated numbered list. The select menu
+ * (built separately) carries the actual result rows.
  */
 export function formatSearchResults(
 	query: string,
@@ -77,16 +73,7 @@ export function formatSearchResults(
 		return `No results found for \`${safeQuery}\`.`;
 	}
 
-	const shown = results.slice(0, MAX_SEARCH_RESULTS);
-	const lines = [
-		`**Top ${shown.length} result${shown.length === 1 ? "" : "s"} for** \`${safeQuery}\`:`,
-		...shown.map(formatResultLine),
-	];
-	if (results.length > shown.length) {
-		lines.push(`_Showing ${shown.length} of ${results.length} results._`);
-	}
-
-	return truncate(lines.join("\n"), DISCORD_CONTENT_LIMIT);
+	return `Choose a release for **${safeQuery}**:`;
 }
 
 async function completeSearch(

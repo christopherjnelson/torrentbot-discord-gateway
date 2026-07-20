@@ -169,21 +169,34 @@ describe("/search command", () => {
 		expect(edit.body.allowed_mentions).toEqual({ parse: [] });
 
 		const content = edit.body.content ?? "";
-		expect(content).toContain("blade runner");
-		// Sorted by seeders: the 120-seed 1080p release ranks first.
-		expect(content).toContain("**1.** `Blade.Runner.1982.Final.Cut.1080p");
-		expect(content).toContain("1.4 GiB");
-		expect(content).toContain("120 seeds");
-		expect(content).toContain("Movies");
-		expect(content).toContain("magnet ✓");
-		expect(content).toContain("ExampleTracker");
+		// Concise heading only — no duplicated numbered result list.
+		expect(content).toContain("Choose a release for **blade runner**:");
+		expect(content).not.toContain("**1.** `Blade.Runner");
+		expect(content).not.toContain("Top");
+		expect(content.length).toBeLessThanOrEqual(2000);
+
+		// A select menu is attached with descriptive options.
+		const components = (edit.body as any).components as any[];
+		expect(Array.isArray(components)).toBe(true);
+		const select = components[0].components[0];
+		expect(select.type).toBe(3);
+		expect(select.options.length).toBe(2);
+		// The 120-seed 1080p release ranks first.
+		expect(select.options[0].label).toContain("Blade.Runner.1982.Final.Cut.1080p");
+		expect(select.options[0].description).toContain("1.4 GiB");
+		expect(select.options[0].description).toContain("120 seeds");
+		expect(select.options[0].description).toContain("ExampleTracker");
+		// Hidden value is the info hash; never shown in content or label.
+		expect(select.options[0].value).toBe("89abcdef012345670123456789abcdef01234567");
+		expect(content).not.toContain(select.options[0].value);
+		expect(select.options[0].label).not.toContain(select.options[0].value);
+		expect(select.options[0].description).not.toContain(select.options[0].value);
 		// Magnet URIs and Prowlarr proxy URLs (which embed the API key) must
 		// never appear in Discord output.
 		expect(content).not.toContain("magnet:?xt");
 		expect(content).not.toContain("btih");
 		expect(content).not.toContain("apikey");
 		expect(content).not.toContain("prowlarr-key");
-		expect(content.length).toBeLessThanOrEqual(2000);
 	});
 
 	it("reports empty result sets", async () => {

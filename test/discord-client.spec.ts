@@ -28,9 +28,21 @@ afterAll(() => {
 describe("/search select menu payload", () => {
 	it("builds a valid action-row / string-select structure", async () => {
 		const results = [
-			{ title: "Release A", infoHash: "0123456789ABCDEF0123456789ABCDEF01234567" },
-			{ title: "Release B", infoHash: "89abcdef012345670123456789abcdef01234567" },
-		];
+			{
+				title: "Release A",
+				sizeBytes: 2147483648,
+				seeders: 7049,
+				source: "The Pirate Bay",
+				infoHash: "0123456789ABCDEF0123456789ABCDEF01234567",
+			},
+			{
+				title: "Release B",
+				sizeBytes: null,
+				seeders: null,
+				source: null,
+				infoHash: "89abcdef012345670123456789abcdef01234567",
+			},
+		] as any;
 		const components = (await buildSearchComponents(
 			results,
 			TEST_USER_ID,
@@ -55,13 +67,31 @@ describe("/search select menu payload", () => {
 			expect(opt.label.length).toBeLessThanOrEqual(DISCORD_ID_LIMIT);
 			expect(opt.value.length).toBeLessThanOrEqual(DISCORD_ID_LIMIT);
 		}
+
+		// Option 0: full metadata -> "size • n seeds • source".
+		const opt0 = select.options[0];
+		expect(opt0.label).toBe("Release A");
+		expect(opt0.description).toContain("2 GiB");
+		expect(opt0.description).toContain("7049 seeds");
+		expect(opt0.description).toContain("The Pirate Bay");
+		expect(opt0.description).not.toContain("undefined");
+		// Info hash is the hidden value only — never in label/description.
+		expect(opt0.value).toBe("0123456789ABCDEF0123456789ABCDEF01234567");
+		expect(opt0.label).not.toContain(opt0.value);
+		expect(opt0.description).not.toContain(opt0.value);
+
+		// Option 1: missing metadata is omitted cleanly (no placeholder).
+		const opt1 = select.options[1];
+		expect(opt1.description).toBeUndefined();
+		expect(opt1.label).toBe("Release B");
+
 		// No more than five options for this feature.
 		expect(select.options.length).toBeLessThanOrEqual(5);
 	});
 
 	it("returns null when no results carry an info hash", async () => {
 		const components = await buildSearchComponents(
-			[{ title: "No hash", infoHash: null }],
+			[{ title: "No hash", sizeBytes: null, seeders: null, source: null, infoHash: null }] as any,
 			TEST_USER_ID,
 			TEST_SIGNING_SECRET,
 		);
@@ -193,5 +223,54 @@ describe("Discord edit error diagnostics", () => {
 		// The signed custom_id (derived from the user id) must not appear.
 		expect(logged).not.toContain(customId);
 		warnSpy.mockRestore();
+	});
+});
+
+describe("search response content formatting", () => {
+	it("uses the concise query heading and no numbered list", async () => {
+		const { formatSearchResults } = await import("../src/commands/search");
+		const content = formatSearchResults("backrooms", [
+			{ title: "x", sizeBytes: 1, seeders: 1, source: "y", infoHash: "a" },
+		] as any);
+		expect(content).toBe("Choose a release for **backrooms**:");
+		expect(content).not.toContain("1.");
+		expect(content).not.toContain("Top");
+	});
+
+	it("reports no results with a concise message", async () => {
+		const { formatSearchResults } = await import("../src/commands/search");
+		const content = formatSearchResults("nothing", []);
+		expect(content).toBe("No results found for `nothing`.");
+	});
+
+	it("joins available metadata with a bullet and omits missing", async () => {
+		const { formatResultDescription } = await import("../src/commands/search");
+		const full = formatResultDescription({
+			title: "t",
+			sizeBytes: 2147483648,
+			seeders: 7049,
+			source: "The Pirate Bay",
+		} as any);
+		expect(full).toBe("2 GiB • 7049 seeds • The Pirate Bay");
+
+		const sparse = formatResultDescription({
+			title: "t",
+			sizeBytes: null,
+			seeders: null,
+			source: null,
+		} as any);
+		expect(sparse).toBe("");
+	});
+
+	it("does not leak the info hash or magnet in the description", async () => {
+		const { formatResultDescription } = await import("../src/commands/search");
+		const desc = formatResultDescription({
+			title: "t",
+			sizeBytes: 1000,
+			seeders: 5,
+			source: "Tracker",
+		} as any);
+		expect(desc).not.toContain("btih");
+		expect(desc).not.toContain("magnet");
 	});
 });

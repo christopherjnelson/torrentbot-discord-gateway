@@ -13,6 +13,8 @@ import {
 } from "../discord/types";
 import { createTorrent } from "../services/torbox";
 import { sanitizeInline } from "../utils/format";
+import type { TorrentResult } from "../types/search";
+import { formatResultDescription } from "./search";
 import {
 	logUpstreamFailure,
 	upstreamErrorMessage,
@@ -197,7 +199,7 @@ async function processComponentInteraction(
  * Returns null if no results have valid info hashes.
  */
 export async function buildSearchComponents(
-	results: readonly { title: string; infoHash: string | null }[],
+	results: readonly TorrentResult[],
 	userId: string,
 	signingSecret: string,
 ): Promise<object[] | null> {
@@ -217,21 +219,22 @@ export async function buildSearchComponents(
 	// Each option's value is the info hash directly. The custom_id signature
 	// validates the user and expiry; the option value is validated as a
 	// proper info hash before use.
-	const options = selectable.map((result) => {
-		const rawLabel = sanitizeInline(result.title, 100);
-		const value = result.infoHash as string;
-		if (value.length > DISCORD_ID_LIMIT) {
-			throw new Error("select option value exceeds Discord 100-char limit");
-		}
-		if (rawLabel.length > DISCORD_ID_LIMIT) {
-			throw new Error("select option label exceeds Discord 100-char limit");
-		}
-		return {
-			label: rawLabel,
-			value,
-			description: `Hash: ${value.slice(0, 16)}...`,
-		};
-	});
+		const options = selectable.map((result) => {
+			const rawLabel = sanitizeInline(result.title, 100);
+			const value = result.infoHash as string;
+			if (value.length > DISCORD_ID_LIMIT) {
+				throw new Error("select option value exceeds Discord 100-char limit");
+			}
+			if (rawLabel.length > DISCORD_ID_LIMIT) {
+				throw new Error("select option label exceeds Discord 100-char limit");
+			}
+			const description = formatResultDescription(result);
+			return {
+				label: rawLabel,
+				value,
+				description: description.length > 0 ? description : undefined,
+			};
+		});
 
 	// Fail-safe invariant checks before sending to Discord.
 	if (customId.length > DISCORD_ID_LIMIT) {
