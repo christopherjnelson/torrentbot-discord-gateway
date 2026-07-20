@@ -1,9 +1,9 @@
 # TorrentBot — Discord gateway on Cloudflare Workers
 
 TorrentBot is a Discord bot built as a TypeScript Cloudflare Worker. It lets a
-Discord guild search for torrents through TorBox's Voyager search engine and
-optionally submit magnets to a TorBox account — no servers, no n8n workflow
-required for the core flow.
+Discord guild search for torrents through a self-hosted
+[Prowlarr](https://prowlarr.com) instance and optionally submit magnets to a
+TorBox account — no servers, no n8n workflow required for the core flow.
 
 ```
 Discord (slash commands)
@@ -11,10 +11,10 @@ Discord (slash commands)
    ▼
 Cloudflare Worker ─────────────────────────────┐
    │                                           │
-   ├─► Voyager Torznab search                  │
-   │    GET search-api.torbox.app/torznab/api  │
+   ├─► Prowlarr API (search)                   │
+   │    GET prowlarr.chris.guru/api/v1/search  │
    │                                           │
-   ├─► TorBox API                              │
+   ├─► TorBox API (add/status)                 │
    │    POST api.torbox.app/v1/api/torrents/…  │
    │                                           │
    └─► Discord follow-up webhooks              │
@@ -23,13 +23,17 @@ Cloudflare Worker ────────────────────�
 n8n / automation ──► /api/* (Bearer auth) ──────┘
 ```
 
+Search goes directly to Prowlarr; torrent management goes directly to TorBox.
+The TorBox Voyager/Torznab endpoint (`search-api.torbox.app`) is **not** used
+and no Voyager API key is required.
+
 ## Implemented commands and routes
 
 **Discord (guild-scoped slash commands)**
 
 | Command | Description | Who can use it |
 | --- | --- | --- |
-| `/search query:<text>` | Search Voyager, show the top 5 results (title, size, seeders, category/source, magnet/hash availability) | Everyone |
+| `/search query:<text>` | Search Prowlarr, show the top 5 results (title, size, seeders, category/source, magnet/hash availability) | Everyone |
 | `/add magnet:<uri>` | Submit a magnet URI to TorBox | Users in `TORBOX_ALLOWED_USER_IDS` |
 | `/status` | List the TorBox account's downloads (ephemeral) | Users in `TORBOX_ALLOWED_USER_IDS` |
 
@@ -39,12 +43,12 @@ n8n / automation ──► /api/* (Bearer auth) ──────┘
 | --- | --- |
 | `GET /` | Health check |
 | `POST /discord/interactions` | Discord interaction webhook (Ed25519 verified) |
-| `POST /api/search` | Internal search API (`{query, limit?}`) |
-| `POST /api/torrents` | Internal add-magnet API (`{magnet}`) |
-| `GET /api/torrents/:id` | Internal torrent status API |
+| `POST /api/search` | Internal search API (`{query, limit?}`), backed by Prowlarr |
+| `POST /api/torrents` | Internal add-magnet API (`{magnet}`), backed by TorBox |
+| `GET /api/torrents/:id` | Internal torrent status API, backed by TorBox |
 
 `/search` answers Discord within the 3-second deadline using a deferred
-response (type 5), then queries Voyager via `ctx.waitUntil` and edits the
+response (type 5), then queries Prowlarr via `ctx.waitUntil` and edits the
 original response through the follow-up webhook
 (`PATCH /webhooks/{application.id}/{interaction.token}/messages/@original`).
 `/add` and `/status` defer ephemerally and complete the same way.
@@ -56,8 +60,9 @@ original response through the follow-up webhook
 - Node.js 22+ and npm
 - A Cloudflare account with Workers enabled
 - A Discord account and a Discord application (below)
-- A TorBox account with an API key (paid plan required for Voyager search;
-  see "External API assumptions")
+- A running Prowlarr instance reachable from Cloudflare (this deployment uses
+  `https://prowlarr.chris.guru`) with its API key
+- A TorBox account with an API key (only needed for `/add` and `/status`)
 
 ### 2. Discord application setup
 
@@ -70,7 +75,24 @@ original response through the follow-up webhook
 5. Note your guild (server) ID: Discord client → right-click server →
    "Copy Server ID" (requires Developer Mode).
 
-### 3. Local configuration
+### 3. Prowlarr setup
+
+1. In Prowlarr, add and test your indexers (Settings → Indexers) and confirm
+   a manual search in the Prowlarr UI returns results.
+2. Copy the API key: **Settings → General → Security → API Key**.
+3. Verify the instance independently (replace host and key):
+
+```sh
+curl -sS "https://prowlarr.chris.guru/api/v1/search?query=ubuntu&limit=2" \
+  -H "X-Api-Key: $PROWLARR_API_KEY" | head -c 600
+```
+
+A valid key returns a JSON array of releases (`title`, `size`, `seeders`,
+`leechers`, `indexer`, `infoHash`, …). A missing/invalid key returns `401`.
+`https://prowlarr.chris.guru/ping` answers `{"status":"OK"}` without a key
+and is a quick liveness check.
+
+### 4. Local configuration
 
 ```sh
 npm install
@@ -85,27 +107,29 @@ Fill in `.dev.vars` (never commit it — it is git-ignored):
 | `DISCORD_APPLICATION_ID` | id | Command registration script |
 | `DISCORD_BOT_TOKEN` | secret | Command registration script only |
 | `DISCORD_GUILD_ID` | id | Guild-scoped command registration |
-| `TORBOX_API_KEY` | secret | TorBox API + Voyager `apikey` |
-| `VOYAGER_API_KEY` | secret | Optional override if Voyager ever needs a distinct key (falls back to `TORBOX_API_KEY`) |
+| `PROWLARR_API_KEY` | secret | Prowlarr search (`X-Api-Key` header) |
+| `TORBOX_API_KEY` | secret | TorBox API (`/add`, `/status`, `/api/torrents`) |
 | `INTERNAL_API_TOKEN` | secret | Bearer token for `/api/*` (generate a long random string) |
+| `PROWLARR_URL` | var | Prowlarr base URL (set in `wrangler.jsonc`; `.dev.vars` overrides locally) |
 | `TORBOX_ALLOWED_USER_IDS` | var | Comma-separated Discord user IDs allowed to run `/add` and `/status` |
 | `UPSTREAM_TIMEOUT_MS` | var | Optional upstream timeout override (default `10000`) |
 
-### 4. Cloudflare production configuration
+### 5. Cloudflare production configuration
 
 Secrets (values never appear in the repo or in logs):
 
 ```sh
 npx wrangler secret put DISCORD_PUBLIC_KEY
+npx wrangler secret put PROWLARR_API_KEY
 npx wrangler secret put TORBOX_API_KEY
 npx wrangler secret put INTERNAL_API_TOKEN
-# optional: npx wrangler secret put VOYAGER_API_KEY
 ```
 
-Non-secret vars live in `wrangler.jsonc` (`TORBOX_ALLOWED_USER_IDS`,
-`UPSTREAM_TIMEOUT_MS`) and can be edited there or in the Cloudflare dashboard.
+Non-secret vars live in `wrangler.jsonc` (`PROWLARR_URL`,
+`TORBOX_ALLOWED_USER_IDS`, `UPSTREAM_TIMEOUT_MS`) and can be edited there or
+in the Cloudflare dashboard.
 
-### 5. Register the Discord commands
+### 6. Register the Discord commands
 
 ```sh
 npm run discord:register    # idempotent guild-scoped PUT
@@ -115,7 +139,7 @@ npm run discord:unregister  # removes all guild commands
 Registration is guild-scoped (instant propagation) and safe to re-run. Global
 commands are never touched.
 
-### 6. Run and deploy
+### 7. Run and deploy
 
 ```sh
 npm run dev        # local development via wrangler dev
@@ -149,10 +173,10 @@ src/
   config.ts           env binding accessors (graceful degradation)
   discord/            types, Ed25519 verify, responses, follow-up client, router
   commands/           search, add, status, shared error mapping
-  services/           voyager (Torznab XML), torbox (JSON API)
+  services/           prowlarr (search JSON API), torbox (JSON API)
   routes/             discord webhook, internal API
   utils/              format, http (timeouts), errors, auth, magnet
-  types/              torznab, torbox models
+  types/              search, torbox models
 test/                 vitest + @cloudflare/vitest-pool-workers
 scripts/              register-commands.mjs
 ```
@@ -161,15 +185,17 @@ scripts/              register-commands.mjs
 
 `npm test` runs Vitest inside a real Worker runtime
 (`@cloudflare/vitest-pool-workers`). Outbound HTTP is mocked with
-`fetchMock`; tests never contact Discord, Voyager, or TorBox. Signed Discord
+`fetchMock`; tests never contact Discord, Prowlarr, or TorBox. Signed Discord
 requests are produced with a generated Ed25519 test key pair — production
 verification is not weakened for tests.
 
 Coverage includes: health/404s, unsigned/invalid-signature rejection, valid
 PING→PONG, command routing, missing/malformed options, deferred responses and
-follow-up edits, Voyager success/empty/500/429/timeout/malformed-XML, XML
-entity-expansion rejection, formatting limits, magnet validation, TorBox
-success/duplicate/auth-failure/timeout, and internal API authentication.
+follow-up edits, Prowlarr success/empty/401/500/timeout/malformed-JSON, URL
+and `X-Api-Key` header construction, credential-bearing proxy-URL rejection,
+deterministic ordering and limits, formatting limits, magnet validation,
+TorBox success/duplicate/auth-failure/timeout, and internal API
+authentication.
 
 ## Security model
 
@@ -183,11 +209,14 @@ success/duplicate/auth-failure/timeout, and internal API authentication.
   authorization headers, full magnet URIs, and raw interaction payloads are
   never logged. Upstream error types never carry request URLs (which can
   contain credentials).
+- **Prowlarr proxy URLs**: Prowlarr rewrites `downloadUrl`/`magnetUrl` in
+  search responses into proxy URLs that embed the Prowlarr API key
+  (`/{indexerId}/download?apikey=…`). The adapter never propagates them:
+  magnets are synthesized from the info hash (or passed through only when
+  already a raw `magnet:` URI), and result links come from the un-proxied
+  `infoUrl` field.
 - **Mentions**: all bot messages set `allowed_mentions: { parse: [] }`;
   titles are sanitized and length-capped (Discord's 2000-char limit).
-- **XML**: Voyager responses are parsed with a non-validating parser that
-  performs no I/O; documents containing a DOCTYPE are rejected outright to
-  prevent entity-expansion/XXE attacks.
 - **Privacy**: Discord output shows magnet/hash *availability markers* only.
   Magnet URIs are exposed solely through the authenticated internal API.
 
@@ -199,10 +228,15 @@ Verified (2026-07-19):
   deadline, 15-minute follow-up token validity, the follow-up edit endpoint,
   the 2000-character content limit, and `allowed_mentions` semantics — from
   the official Discord developer documentation.
-- `GET https://search-api.torbox.app/torznab/api` exists (also
-  `/newznab/api`) and requires the `apikey` and `t` query parameters — from
-  the live service's public OpenAPI spec. Missing params → 422 JSON; invalid
-  key → 429 JSON (`{"error":"Rate limit exceeded: 0 per 1 minute"}`).
+- Prowlarr search: `GET /api/v1/search` with query params `query`, `type`,
+  `indexerIds`, `categories`, `limit`, `offset`, authenticated via the
+  `X-Api-Key` header — from the official Prowlarr source
+  (`SearchController.cs`, `SearchResource.cs`, `ReleaseResource.cs`,
+  `AuthenticationBuilderExtensions.cs`) and confirmed against the live
+  instance (`/ping` → `{"status":"OK"}`; unauthenticated `/api/v1/search` →
+  401). Response items are normalized tolerantly: only `title` is required;
+  `size`, `seeders`, `leechers`, `categories`, `indexer`, `infoUrl`,
+  `infoHash`, `publishDate`, and `magnetUrl` are all optional.
 - TorBox main API (`https://api.torbox.app/v1/api`): `POST
   /torrents/createtorrent` (multipart `magnet` field, Bearer auth) and `GET
   /torrents/mylist` shapes — from the official TorBox API documentation,
@@ -210,13 +244,6 @@ Verified (2026-07-19):
 
 Not yet verified (needs a real TorBox API key):
 
-- The exact success XML emitted by Voyager's Torznab endpoint. The adapter
-  targets the standard Newznab/Torznab RSS shape (`rss > channel > item` with
-  `torznab:attr` extensions) and treats every field as optional, so any
-  compliant feed works; confirm the first real response before relying on
-  specific attributes (e.g. `seeders`, `magneturl`).
-- That the Voyager `apikey` is the TorBox account API key (strongly implied
-  by TorBox docs; `VOYAGER_API_KEY` exists as an override if not).
 - Whether TorBox `mylist` `progress` is 0–1 or 0–100; the bot normalizes
   both (`<= 1` is treated as a fraction).
 
@@ -225,7 +252,7 @@ Not yet verified (needs a real TorBox API key):
 All routes require `Authorization: Bearer $INTERNAL_API_TOKEN`.
 
 ```sh
-# Search
+# Search (Prowlarr)
 curl -X POST https://<worker>.workers.dev/api/search \
   -H "Authorization: Bearer $INTERNAL_API_TOKEN" \
   -H "Content-Type: application/json" \
@@ -251,20 +278,25 @@ responses never include download URLs, file lists, or server paths.
   from Discord or the `DISCORD_PUBLIC_KEY` is wrong.
 - **Commands don't appear in Discord**: re-run `npm run discord:register`
   and check `DISCORD_APPLICATION_ID`, `DISCORD_GUILD_ID`, `DISCORD_BOT_TOKEN`.
-- **"Search is not configured"**: set `TORBOX_API_KEY` (or `VOYAGER_API_KEY`).
-- **Voyager returns 429**: the API key is invalid, or you are rate limited;
-  the bot surfaces this as "rate limiting".
+- **"Search is not configured"**: set `PROWLARR_URL` (var) and
+  `PROWLARR_API_KEY` (secret).
+- **"The upstream service rejected the configured credentials"**: the
+  `PROWLARR_API_KEY` is wrong or was rotated; copy the current key from
+  Prowlarr → Settings → General → Security → API Key.
 - **`/add` says "not authorized"**: add your Discord user ID to
   `TORBOX_ALLOWED_USER_IDS` (var, comma-separated).
 
 ## Remaining manual steps
 
-1. Create the Discord application/guild and TorBox account (above).
+1. Create the Discord application/guild, Prowlarr instance, and TorBox
+   account (above).
 2. Add real IDs and API keys to `.dev.vars`.
 3. Add production secrets (`wrangler secret put …`) and review
-   `wrangler.jsonc` vars.
-4. Run `npm run discord:register`.
+   `wrangler.jsonc` vars (`PROWLARR_URL` in particular).
+4. Run `npm run discord:register` (re-run it after pulling changes that
+   touch `scripts/register-commands.mjs`).
 5. Run `npm run deploy`.
 6. Enter the interactions endpoint URL in the Discord Developer Portal.
-7. First real search: confirm Voyager's XML matches the tolerant parser's
-   expectations (see "External API assumptions").
+7. First real search: run `/search ubuntu` in Discord and confirm the Worker
+   returns Prowlarr results (the Prowlarr UI's History → Search log shows
+   the incoming API search).
