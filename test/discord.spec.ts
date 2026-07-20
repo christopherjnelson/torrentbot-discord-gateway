@@ -59,7 +59,7 @@ describe("signed interaction handling", () => {
 
 	it("rejects unsupported interaction types", async () => {
 		const { response } = await dispatchInteraction(
-			JSON.stringify(makeInteraction({ type: 3 })),
+			JSON.stringify(makeInteraction({ type: 99 })),
 		);
 		expect(response.status).toBe(400);
 		expect(await response.json()).toEqual({

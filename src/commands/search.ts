@@ -6,6 +6,7 @@ import {
 } from "../discord/responses";
 import {
 	getStringOption,
+	getInvokerId,
 	type DiscordInteraction,
 } from "../discord/types";
 import { searchProwlarr } from "../services/prowlarr";
@@ -18,6 +19,7 @@ import {
 	truncate,
 } from "../utils/format";
 import { logUpstreamFailure, upstreamErrorMessage } from "./shared";
+import { buildSearchComponents } from "./component";
 
 export const SEARCH_COMMAND_NAME = "search";
 export const MAX_SEARCH_RESULTS = 5;
@@ -97,6 +99,8 @@ async function completeSearch(
 	const baseUrl = config.prowlarrUrl as string;
 
 	let content: string;
+	let components: object[] | null = null;
+
 	try {
 		const results = await searchProwlarr(query, {
 			apiKey,
@@ -105,6 +109,18 @@ async function completeSearch(
 			limit: MAX_SEARCH_RESULTS,
 		});
 		content = formatSearchResults(query, results);
+
+		// Build select menu if signing is configured and there are selectable results.
+		if (config.componentSigningSecret) {
+			const userId = getInvokerId(interaction);
+			if (userId) {
+				components = await buildSearchComponents(
+					results,
+					userId,
+					config.componentSigningSecret,
+				);
+			}
+		}
 	} catch (error) {
 		logUpstreamFailure("search failed", error);
 		content = upstreamErrorMessage(error);
@@ -114,7 +130,7 @@ async function completeSearch(
 		await editOriginalResponse(
 			interaction.application_id,
 			interaction.token,
-			{ content },
+			{ content, components: components ?? undefined },
 		);
 	} catch (error) {
 		logUpstreamFailure("failed to edit interaction response", error);

@@ -1,6 +1,6 @@
 import nodeCrypto from "node:crypto";
 import { createExecutionContext, env, fetchMock } from "cloudflare:test";
-import type { CommandOption, DiscordInteraction } from "../src/discord/types";
+import type { CommandOption, ComponentData, DiscordInteraction } from "../src/discord/types";
 import worker from "../src/index";
 
 /**
@@ -70,6 +70,19 @@ export function makeInteraction(
 		member: { user: { id: TEST_USER_ID } },
 		...overrides,
 	};
+}
+
+export function makeComponentInteraction(
+	overrides: Partial<DiscordInteraction> = {},
+): DiscordInteraction {
+	return makeInteraction({
+		type: 3, // INTERACTION_MESSAGE_COMPONENT
+		data: {
+			custom_id: "torrentbot:add-result:test",
+			values: ["test-hash"],
+		},
+		...overrides,
+	});
 }
 
 export function makeCommandInteraction(

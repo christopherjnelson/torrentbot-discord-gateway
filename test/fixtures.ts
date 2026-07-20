@@ -6,6 +6,10 @@
  * `downloadUrl`/`magnetUrl` (`/{indexerId}/download?apikey=...&link=...`):
  * tests assert those credential-bearing URLs are never propagated.
  */
+
+/** Test signing secret for component payloads. */
+export const TEST_SIGNING_SECRET = "test-signing-secret-32-bytes-long!";
+
 export const PROWLARR_TWO_ITEM_JSON = JSON.stringify([
 	{
 		guid: "https://indexer.example/details/aaa",

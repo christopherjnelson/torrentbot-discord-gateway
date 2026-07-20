@@ -12,9 +12,12 @@ import {
 } from "./responses";
 import {
 	INTERACTION_APPLICATION_COMMAND,
+	INTERACTION_MESSAGE_COMPONENT,
 	INTERACTION_PING,
+	type ApplicationCommandData,
 	type DiscordInteraction,
 } from "./types";
+import { handleComponentInteraction } from "../commands/component";
 
 /**
  * Route a verified Discord interaction to its handler.
@@ -30,7 +33,8 @@ export function routeInteraction(
 
 	if (interaction.type === INTERACTION_APPLICATION_COMMAND) {
 		const config = getConfig(env);
-		switch (interaction.data?.name) {
+		const data = interaction.data as ApplicationCommandData | undefined;
+		switch (data?.name) {
 			case SEARCH_COMMAND_NAME:
 				return handleSearchCommand(interaction, config, ctx);
 			case ADD_COMMAND_NAME:
@@ -43,6 +47,10 @@ export function routeInteraction(
 					true,
 				);
 		}
+	}
+
+	if (interaction.type === INTERACTION_MESSAGE_COMPONENT) {
+		return handleComponentInteraction(interaction, env, ctx);
 	}
 
 	return errorResponse("Unsupported interaction type", 400);

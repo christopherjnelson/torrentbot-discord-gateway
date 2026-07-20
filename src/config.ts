@@ -22,6 +22,8 @@ export interface AppConfig {
 	torboxAllowedUserIds: string[];
 	/** Timeout applied to Prowlarr/TorBox upstream calls. */
 	upstreamTimeoutMs: number;
+	/** Secret used to sign and verify Discord component payloads. */
+	componentSigningSecret: string | undefined;
 }
 
 const DEFAULT_UPSTREAM_TIMEOUT_MS = 10_000;
@@ -54,6 +56,7 @@ export function getConfig(env: Env): AppConfig {
 			.map((id) => id.trim())
 			.filter((id) => id.length > 0),
 		upstreamTimeoutMs: readTimeoutMs(env.UPSTREAM_TIMEOUT_MS),
+		componentSigningSecret: readString(env.COMPONENT_SIGNING_SECRET),
 	};
 }
 

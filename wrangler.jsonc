@@ -14,7 +14,7 @@
 	// /add and /status. Empty means nobody is authorized. PROWLARR_URL is the
 	// base URL of the Prowlarr instance backing /search and /api/search.
 	"vars": {
-		"TORBOX_ALLOWED_USER_IDS": "",
+		"TORBOX_ALLOWED_USER_IDS": "234752290047655936",
 		"UPSTREAM_TIMEOUT_MS": "10000",
 		"PROWLARR_URL": "https://prowlarr.chris.guru"
 	},
@@ -25,7 +25,8 @@
 			"DISCORD_PUBLIC_KEY",
 			"PROWLARR_API_KEY",
 			"TORBOX_API_KEY",
-			"INTERNAL_API_TOKEN"
+			"INTERNAL_API_TOKEN",
+			"COMPONENT_SIGNING_SECRET"
 		]
 	}
 }

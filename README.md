@@ -33,7 +33,7 @@ and no Voyager API key is required.
 
 | Command | Description | Who can use it |
 | --- | --- | --- |
-| `/search query:<text>` | Search Prowlarr, show the top 5 results (title, size, seeders, category/source, magnet/hash availability) | Everyone |
+| `/search query:<text>` | Search Prowlarr, show the top 5 results (title, size, seeders, category/source, magnet/hash availability); results with valid info hashes include a select menu to add to TorBox | Everyone |
 | `/add magnet:<uri>` | Submit a magnet URI to TorBox | Users in `TORBOX_ALLOWED_USER_IDS` |
 | `/status` | List the TorBox account's downloads (ephemeral) | Users in `TORBOX_ALLOWED_USER_IDS` |
 
@@ -52,6 +52,13 @@ response (type 5), then queries Prowlarr via `ctx.waitUntil` and edits the
 original response through the follow-up webhook
 (`PATCH /webhooks/{application.id}/{interaction.token}/messages/@original`).
 `/add` and `/status` defer ephemerally and complete the same way.
+
+When `/search` returns results with valid info hashes, it also includes a
+Discord select menu component. The original requester can use this menu to
+submit a selected result to TorBox without manually copying the magnet URI.
+The menu is disabled after a successful submission. Component interactions are
+signed with HMAC-SHA-256 to prevent tampering and bind the selection to the
+original requester.
 
 ## Setup
 
@@ -110,6 +117,7 @@ Fill in `.dev.vars` (never commit it — it is git-ignored):
 | `PROWLARR_API_KEY` | secret | Prowlarr search (`X-Api-Key` header) |
 | `TORBOX_API_KEY` | secret | TorBox API (`/add`, `/status`, `/api/torrents`) |
 | `INTERNAL_API_TOKEN` | secret | Bearer token for `/api/*` (generate a long random string) |
+| `COMPONENT_SIGNING_SECRET` | secret | HMAC-SHA-256 signing for Discord component interactions (generate with `openssl rand -hex 32`) |
 | `PROWLARR_URL` | var | Prowlarr base URL (set in `wrangler.jsonc`; `.dev.vars` overrides locally) |
 | `TORBOX_ALLOWED_USER_IDS` | var | Comma-separated Discord user IDs allowed to run `/add` and `/status` |
 | `UPSTREAM_TIMEOUT_MS` | var | Optional upstream timeout override (default `10000`) |
@@ -123,6 +131,14 @@ npx wrangler secret put DISCORD_PUBLIC_KEY
 npx wrangler secret put PROWLARR_API_KEY
 npx wrangler secret put TORBOX_API_KEY
 npx wrangler secret put INTERNAL_API_TOKEN
+npx wrangler secret put COMPONENT_SIGNING_SECRET
+```
+
+The `COMPONENT_SIGNING_SECRET` is used to sign and verify Discord component
+interaction payloads (the select menu in `/search` results). Generate it with:
+
+```sh
+openssl rand -hex 32
 ```
 
 Non-secret vars live in `wrangler.jsonc` (`PROWLARR_URL`,
@@ -172,10 +188,10 @@ src/
   index.ts            route dispatch
   config.ts           env binding accessors (graceful degradation)
   discord/            types, Ed25519 verify, responses, follow-up client, router
-  commands/           search, add, status, shared error mapping
+  commands/           search, add, status, component (select menu handler), shared error mapping
   services/           prowlarr (search JSON API), torbox (JSON API)
   routes/             discord webhook, internal API
-  utils/              format, http (timeouts), errors, auth, magnet
+  utils/              format, http (timeouts), errors, auth, magnet, signing (HMAC)
   types/              search, torbox models
 test/                 vitest + @cloudflare/vitest-pool-workers
 scripts/              register-commands.mjs
@@ -205,6 +221,11 @@ authentication.
   constant-time comparison (SHA-256 pre-hashed before the compare loop).
 - **TorBox authorization**: `/add` and `/status` are restricted to Discord
   user IDs in `TORBOX_ALLOWED_USER_IDS` and reply ephemerally.
+- **Component interaction authorization**: select menu interactions from
+  `/search` results are restricted to the original requester (verified via
+  HMAC-SHA-256 signed payloads) and require the user to be in
+  `TORBOX_ALLOWED_USER_IDS`. The signing secret is
+  `COMPONENT_SIGNING_SECRET`. Payloads expire after 15 minutes.
 - **No secret logging**: interaction tokens, bot tokens, API keys,
   authorization headers, full magnet URIs, and raw interaction payloads are
   never logged. Upstream error types never carry request URLs (which can
@@ -219,6 +240,10 @@ authentication.
   titles are sanitized and length-capped (Discord's 2000-char limit).
 - **Privacy**: Discord output shows magnet/hash *availability markers* only.
   Magnet URIs are exposed solely through the authenticated internal API.
+- **Component payloads**: Discord component values and custom_ids are treated
+  as untrusted input. Info hashes from select menu options are validated
+  (40-character hexadecimal) before use. The HMAC signature binds the
+  interaction to the original requester and prevents tampering.
 
 ## External API assumptions
 
@@ -300,3 +325,13 @@ responses never include download URLs, file lists, or server paths.
 7. First real search: run `/search ubuntu` in Discord and confirm the Worker
    returns Prowlarr results (the Prowlarr UI's History → Search log shows
    the incoming API search).
+
+## Current limitations
+
+- **Task 1 (this task)**: The select menu in `/search` results only submits
+  torrents to TorBox. Polling for download completion and generating download
+  links are deferred to Task 2.
+- The bot does not currently monitor download progress or notify when downloads
+  complete.
+- Download links are not yet generated. Users must check their TorBox account
+  for completed downloads.

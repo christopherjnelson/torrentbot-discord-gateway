@@ -17,6 +17,7 @@ const DISCORD_API_BASE = "https://discord.com/api/v10";
 
 export interface FollowupMessage {
 	content: string;
+	components?: object[];
 }
 
 /**
@@ -33,14 +34,19 @@ export async function editOriginalResponse(
 		`${DISCORD_API_BASE}/webhooks/${applicationId}` +
 		`/${interactionToken}/messages/@original`;
 
+	const body: Record<string, unknown> = {
+		content: message.content,
+		allowed_mentions: { parse: [] },
+	};
+	if (message.components) {
+		body.components = message.components;
+	}
+
 	const { status } = await fetchText(url, {
 		service: "discord",
 		method: "PATCH",
 		headers: { "content-type": "application/json" },
-		body: JSON.stringify({
-			content: message.content,
-			allowed_mentions: { parse: [] },
-		}),
+		body: JSON.stringify(body),
 		timeoutMs,
 	});
 

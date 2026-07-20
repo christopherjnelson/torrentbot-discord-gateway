@@ -20,3 +20,5 @@ TORBOX_API_KEY=replace-me
 INTERNAL_API_TOKEN=replace-me
 # Non-secret: comma-separated Discord user IDs allowed to run /add and /status
 TORBOX_ALLOWED_USER_IDS=
+# Secret used to sign Discord component payloads (generate with: openssl rand -hex 32)
+COMPONENT_SIGNING_SECRET=replace-me

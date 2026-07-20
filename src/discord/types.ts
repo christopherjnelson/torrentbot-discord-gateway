@@ -9,6 +9,7 @@
 
 export const INTERACTION_PING = 1;
 export const INTERACTION_APPLICATION_COMMAND = 2;
+export const INTERACTION_MESSAGE_COMPONENT = 3;
 
 export const APPLICATION_COMMAND_OPTION_STRING = 3;
 
@@ -23,12 +24,18 @@ export interface ApplicationCommandData {
 	options?: CommandOption[];
 }
 
+/** A select-option value chosen by the user. */
+export interface ComponentData {
+	custom_id: string;
+	values?: string[];
+}
+
 export interface DiscordInteraction {
 	id: string;
 	application_id: string;
 	type: number;
 	token: string;
-	data?: ApplicationCommandData;
+	data?: ApplicationCommandData | ComponentData;
 	guild_id?: string;
 	member?: { user?: { id?: string } };
 	user?: { id?: string };
@@ -103,19 +110,31 @@ export function parseInteraction(raw: unknown): DiscordInteraction | null {
 	}
 
 	if (raw.data !== undefined) {
-		if (!isRecord(raw.data) || typeof raw.data.name !== "string") {
+		if (!isRecord(raw.data)) {
 			return null;
 		}
-		const data: ApplicationCommandData = { name: raw.data.name };
-		if (raw.data.options !== undefined) {
-			if (!Array.isArray(raw.data.options)) {
-				return null;
+
+		// Component interactions have custom_id; commands have name.
+		if (typeof raw.data.custom_id === "string") {
+			const data: ComponentData = { custom_id: raw.data.custom_id };
+			if (Array.isArray(raw.data.values)) {
+				data.values = raw.data.values.filter(
+					(v): v is string => typeof v === "string",
+				);
 			}
-			data.options = raw.data.options
-				.map(parseOption)
-				.filter((option): option is CommandOption => option !== null);
+			interaction.data = data;
+		} else if (typeof raw.data.name === "string") {
+			const data: ApplicationCommandData = { name: raw.data.name };
+			if (raw.data.options !== undefined) {
+				if (!Array.isArray(raw.data.options)) {
+					return null;
+				}
+				data.options = raw.data.options
+					.map(parseOption)
+					.filter((option): option is CommandOption => option !== null);
+			}
+			interaction.data = data;
 		}
-		interaction.data = data;
 	}
 
 	return interaction;
@@ -131,7 +150,11 @@ export function getStringOption(
 	interaction: DiscordInteraction,
 	name: string,
 ): string | undefined {
-	const option = interaction.data?.options?.find(
+	const data = interaction.data;
+	if (!data || !("options" in data)) {
+		return undefined;
+	}
+	const option = data.options?.find(
 		(candidate) => candidate.name === name,
 	);
 	if (option && typeof option.value === "string") {
