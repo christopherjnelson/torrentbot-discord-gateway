@@ -1,6 +1,7 @@
 import nodeCrypto from "node:crypto";
-import { env } from "cloudflare:test";
+import { createExecutionContext, env, fetchMock } from "cloudflare:test";
 import type { CommandOption, DiscordInteraction } from "../src/discord/types";
+import worker from "../src/index";
 
 /**
  * Test-only Ed25519 key pair standing in for the Discord application key.
@@ -79,4 +80,44 @@ export function makeCommandInteraction(
 		data: { name: commandName, options },
 		...overrides,
 	});
+}
+
+/** Dispatch a signed interaction body through the Worker. */
+export async function dispatchInteraction(
+	body: string,
+	envOverrides: Record<string, string> = {},
+) {
+	const ctx = createExecutionContext();
+	const response = await worker.fetch!(
+		signedInteractionRequest(body),
+		testEnv(envOverrides),
+		ctx,
+	);
+	return { ctx, response };
+}
+
+export interface PatchedMessage {
+	path: string;
+	body: { content?: string; allowed_mentions?: { parse?: string[] } };
+}
+
+/** Intercept the follow-up PATCH that edits the original response. */
+export function interceptOriginalResponseEdit(): { captured: PatchedMessage[] } {
+	const captured: PatchedMessage[] = [];
+	fetchMock
+		.get("https://discord.com")
+		.intercept({
+			path: (path) =>
+				path.includes("/api/v10/webhooks/") &&
+				path.endsWith("/messages/@original"),
+			method: "PATCH",
+		})
+		.reply((opts) => {
+			captured.push({
+				path: opts.path,
+				body: JSON.parse(String(opts.body)) as PatchedMessage["body"],
+			});
+			return { statusCode: 200, data: "{}" };
+		});
+	return { captured };
 }

@@ -11,19 +11,13 @@ import {
 import { searchTorrents, sortResults } from "../services/voyager";
 import type { TorrentResult } from "../types/torznab";
 import {
-	TorznabResponseError,
-	UpstreamNetworkError,
-	UpstreamParseError,
-	UpstreamStatusError,
-	UpstreamTimeoutError,
-} from "../utils/errors";
-import {
 	categoryName,
 	DISCORD_CONTENT_LIMIT,
 	formatBytes,
 	sanitizeInline,
 	truncate,
 } from "../utils/format";
+import { logUpstreamFailure, upstreamErrorMessage } from "./shared";
 
 export const SEARCH_COMMAND_NAME = "search";
 export const MAX_SEARCH_RESULTS = 5;
@@ -93,29 +87,6 @@ export function formatSearchResults(
 	return truncate(lines.join("\n"), DISCORD_CONTENT_LIMIT);
 }
 
-/** Map internal errors to safe, user-facing Discord messages. */
-export function searchErrorMessage(error: unknown): string {
-	if (error instanceof UpstreamTimeoutError) {
-		return "Search timed out. The search service is slow right now — try again in a moment.";
-	}
-	if (error instanceof UpstreamStatusError) {
-		if (error.status === 429) {
-			return "The search service is rate limiting us right now. Try again in a minute.";
-		}
-		return `The search service returned an error (HTTP ${error.status}). Try again later.`;
-	}
-	if (error instanceof TorznabResponseError) {
-		return `The search service could not complete the search: ${error.message}`;
-	}
-	if (error instanceof UpstreamParseError) {
-		return "The search service returned an unexpected response. Please try again later.";
-	}
-	if (error instanceof UpstreamNetworkError) {
-		return "Could not reach the search service. Please try again later.";
-	}
-	return "Something went wrong while searching. Please try again later.";
-}
-
 async function completeSearch(
 	interaction: DiscordInteraction,
 	query: string,
@@ -134,11 +105,8 @@ async function completeSearch(
 		);
 		content = formatSearchResults(query, results);
 	} catch (error) {
-		// Log classification only; upstream errors never contain secrets/URLs.
-		console.warn(
-			`search failed: ${error instanceof Error ? error.name : "unknown"}`,
-		);
-		content = searchErrorMessage(error);
+		logUpstreamFailure("search failed", error);
+		content = upstreamErrorMessage(error);
 	}
 
 	try {
@@ -148,11 +116,7 @@ async function completeSearch(
 			{ content },
 		);
 	} catch (error) {
-		console.warn(
-			`failed to edit interaction response: ${
-				error instanceof Error ? error.name : "unknown"
-			}`,
-		);
+		logUpstreamFailure("failed to edit interaction response", error);
 	}
 }
 

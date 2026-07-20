@@ -66,6 +66,29 @@ export class TorznabResponseError extends Error {
 	}
 }
 
+/**
+ * An upstream JSON API returned a structured failure (e.g. TorBox's
+ * `{success: false, error, detail}` envelope). `message` is the upstream's
+ * user-friendly detail, already sanitized for display.
+ */
+export class UpstreamApiError extends Error {
+	readonly service: UpstreamService;
+	readonly status: number | null;
+	readonly code: string | null;
+
+	constructor(
+		service: UpstreamService,
+		detail: string,
+		options: { status?: number; code?: string | null } = {},
+	) {
+		super(detail);
+		this.name = "UpstreamApiError";
+		this.service = service;
+		this.status = options.status ?? null;
+		this.code = options.code ?? null;
+	}
+}
+
 /** A required configuration value (secret/var) is missing at runtime. */
 export class ConfigError extends Error {
 	constructor(message: string) {

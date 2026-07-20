@@ -8,6 +8,8 @@
     "start": "wrangler dev",
     "test": "vitest",
     "typecheck": "tsc --noEmit && tsc --noEmit -p test/tsconfig.json",
+    "discord:register": "node --env-file-if-exists=.dev.vars scripts/register-commands.mjs",
+    "discord:unregister": "node --env-file-if-exists=.dev.vars scripts/register-commands.mjs --unregister",
     "cf-typegen": "wrangler types"
   },
   "devDependencies": {
