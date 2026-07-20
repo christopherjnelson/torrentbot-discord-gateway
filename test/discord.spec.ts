@@ -295,6 +295,7 @@ describe("/search command", () => {
 		expect(Array.isArray(components)).toBe(true);
 		const select = components[0].components[0];
 		expect(select.type).toBe(3);
+		expect(select.placeholder).toBe("Select a release to download");
 		expect(select.options.length).toBe(2);
 		// The 120-seed 1080p release ranks first.
 		expect(select.options[0].label).toContain("Blade.Runner.1982.Final.Cut.1080p");
@@ -574,7 +575,7 @@ describe("/search TorBox cache enrichment", () => {
 		expect(options[0].description).toContain("⚡ Cached");
 	});
 
-	it("makes exactly one cache request for up to five results", async () => {
+	it("makes exactly one cache request for up to ten results", async () => {
 		mockProwlarr(200, PROWLARR_CACHE_JSON);
 		const check = interceptCheckCached(200, CHECKCACHED_UNCACHED);
 		const { captured } = interceptOriginalResponseEdit();
@@ -592,6 +593,78 @@ describe("/search TorBox cache enrichment", () => {
 		expect(check.calls()).toBe(1);
 		// Sanity: the select menu has the three valid-hash results.
 		expect(selectOptions(captured)).toHaveLength(3);
+	});
+
+	it("shows up to 10 distinct valid releases with one cache request", async () => {
+		// 10 valid distinct-hash releases + 1 duplicate + 1 invalid-hash.
+		const HASHES = Array.from({ length: 10 }, (_, i) =>
+			(i.toString(16) + "0".repeat(39)).slice(0, 40),
+		);
+		const tenItems = HASHES.map((h, i) => ({
+			title: `Release.${i + 1}`,
+			size: 1000000 * (i + 1),
+			seeders: 100 - i,
+			leechers: 5,
+			indexer: "Tracker",
+			infoUrl: `https://indexer.example/details/${i}`,
+			infoHash: h,
+			categories: [{ id: 2040, name: "Movies HD" }],
+		}));
+		// A duplicate of the first hash (by uppercase) — must not add an option.
+		tenItems.push({
+			...tenItems[0],
+			title: "Duplicate.Release",
+			infoHash: HASHES[0].toUpperCase(),
+		});
+		// An invalid-hash entry — must not be selectable.
+		tenItems.push({
+			title: "Hashless.Release",
+			size: 1,
+			seeders: 1,
+			leechers: 0,
+			indexer: "NoHash",
+			infoUrl: "https://indexer.example/details/none",
+			infoHash: "short",
+			categories: [{ id: 2040, name: "Movies HD" }],
+		});
+		mockProwlarr(200, JSON.stringify(tenItems));
+		let cacheBody: unknown;
+		fetchMock
+			.get("https://api.torbox.app")
+			.intercept({ path: /\/v1\/api\/torrents\/checkcached/, method: "POST" })
+			.reply((opts) => {
+				cacheBody = JSON.parse(String(opts.body));
+				return {
+					statusCode: 200,
+					data: JSON.stringify({ success: true, error: null, detail: "ok", data: null }),
+				};
+			});
+		const { captured } = interceptOriginalResponseEdit();
+
+		const { ctx } = await dispatchInteraction(
+			JSON.stringify(
+				makeCommandInteraction("search", [
+					{ name: "query", type: 3, value: "test" },
+				]),
+			),
+			{ COMPONENT_SIGNING_SECRET: "test-signing-secret-32-bytes-long!" },
+		);
+		await waitOnExecutionContext(ctx);
+
+		const options = selectOptions(captured);
+		expect(options).toHaveLength(10);
+		// No more than 10 options.
+		expect(options.length).toBeLessThanOrEqual(10);
+		// Exactly one cache request for all 10 selectable hashes.
+		const hashes = (cacheBody as { hashes: string[] }).hashes;
+		expect(hashes).toHaveLength(10);
+		// The cache request includes the same normalized (lowercase) hashes.
+		const optionValues = options.map((o: { value: string }) => o.value.toLowerCase());
+		expect(hashes.sort()).toEqual([...optionValues].sort());
+		// Dedup: all option values are distinct (the duplicate hash appears once).
+		expect(new Set(optionValues).size).toBe(optionValues.length);
+		// The invalid-hash entry is not in the menu.
+		expect(options.map((o: { label: string }) => o.label)).not.toContain("Hashless.Release");
 	});
 
 	it("still returns search results when the cache check fails", async () => {

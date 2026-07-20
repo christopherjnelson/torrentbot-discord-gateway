@@ -33,9 +33,9 @@ and no Voyager API key is required.
 
 | Command | Description | Who can use it |
 | --- | --- | --- |
-| `/search query:<text>` | Search Prowlarr, show the top 5 results (title, size, seeders, category/source, magnet/hash availability); results with valid info hashes include a select menu to add to TorBox. Selectable results are checked against TorBox's cache in one batch request and cached ones are marked with `⚡ Cached` | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
+| `/search query:<text>` | Search Prowlarr, show the top 10 results (title, size, seeders, category/source, magnet/hash availability); results with valid info hashes include a select menu to start a download. Selectable results are checked against TorBox's cache in one batch request and cached ones are marked with `⚡ Cached` | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
 | `/add magnet:<uri>` | Submit a magnet URI to TorBox | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
-| `/status` | List the TorBox account's downloads (ephemeral) | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
+| `/status` | List the TorBox account's downloads (ephemeral); ready torrents include temporary download links | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
 
 **HTTP routes**
 
@@ -54,8 +54,11 @@ original response through the follow-up webhook
 `/add` and `/status` defer ephemerally and complete the same way.
 
 When `/search` returns results with valid info hashes, it also includes a
-Discord select menu component. The original requester can use this menu to
-submit a selected result to TorBox without manually copying the magnet URI.
+Discord select menu component (placeholder: "Select a release to download").
+The original requester can use this menu to submit a selected result to
+TorBox without manually copying the magnet URI. Up to 10 distinct valid
+releases are shown; the bot requests more from Prowlarr (25) to provide
+headroom for duplicate hashes, invalid hashes, and empty labels.
 
 During `/search`, the selectable results' info hashes are also checked
 against TorBox's `POST /torrents/checkcached` endpoint in a single batch
@@ -154,6 +157,18 @@ state and does **not** notify the user later if the torrent finishes after the
 window. Use `/status` as the fallback for items still processing. Persistent
 background monitoring (KV, D1, Durable Objects, Queues, Workflows, or cron) is
 deliberately out of scope for this task.
+
+### `/status` download links
+
+`/status` lists the TorBox account's downloads ephemerally (up to 10 entries).
+Ready torrents (`download_finished === true`) include a temporary TorBox
+download link using the same rules as the selection workflow: exactly one file
+→ a direct file link; zero or multiple files → a whole-torrent ZIP link.
+Processing torrents show status/progress only — no link is requested or
+displayed. Link generation is best-effort enrichment: if a link request fails
+for one torrent, that torrent is still shown without a link and the rest of
+the list is unaffected. Generated links are temporary CDN URLs (~3 hours),
+shown only in the ephemeral response, never logged, and never persisted.
 
 ## Setup
 

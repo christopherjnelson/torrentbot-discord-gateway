@@ -17,7 +17,7 @@ with `new URL("/api/v1/search", baseUrl)` in `src/services/prowlarr.ts`.
 | --- | --- | --- | --- | --- |
 | `query` | yes (by the app) | yes | URL-encoded via `URL.searchParams` | `[impl+tests]` |
 | `type` | no | yes, always `"search"` | hardcoded | `[impl+tests]` `[docs 2026-07-19]` |
-| `limit` | no | yes | clamped to 1–100 (`DEFAULT_LIMIT=25`, `MAX_LIMIT=100`); `/search` sends 5, `/api/search` sends 5–25 | `[impl+tests]` `[docs 2026-07-19]` |
+| `limit` | no | yes | clamped to 1–100 (`DEFAULT_LIMIT=25`, `MAX_LIMIT=100`); `/search` sends 25 (display cap 10), `/api/search` sends 5–25 | `[impl+tests]` `[docs 2026-07-19]` |
 | `offset` | no | **no** | documented but unused | `[docs 2026-07-19]` |
 | `indexerIds` | no | **no** | documented but unused | `[docs 2026-07-19]` |
 | `categories` | no | **no** | documented but unused | `[docs 2026-07-19]` |

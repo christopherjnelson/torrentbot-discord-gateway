@@ -4,7 +4,11 @@ import {
 	messageResponse,
 } from "../discord/responses";
 import { type DiscordInteraction } from "../discord/types";
-import { listTorrents } from "../services/torbox";
+import {
+	listTorrents,
+	requestDownloadLink,
+	selectDownloadTarget,
+} from "../services/torbox";
 import type { TorboxTorrent } from "../types/torbox";
 import {
 	DISCORD_CONTENT_LIMIT,
@@ -31,35 +35,106 @@ export function progressPercent(progress: number): number {
 	return Math.min(100, Math.max(0, Math.round(percent)));
 }
 
-function formatTorrentLine(torrent: TorboxTorrent, index: number): string {
-	const parts: string[] = [
-		formatBytes(torrent.size),
-		sanitizeInline(torrent.download_state, 30),
-		`${progressPercent(torrent.progress)}%`,
-	];
-	if (torrent.seeds > 0) {
-		parts.push(`${torrent.seeds} seeds`);
-	}
-	if (torrent.cached) {
-		parts.push("cached");
-	}
-	return `**${index + 1}.** \`${sanitizeInline(torrent.name, 90)}\` — ${parts.join(" · ")}`;
+/**
+ * A status entry pairs a torrent with an optional temporary download URL.
+ * The URL is present only for ready torrents (`download_finished === true`)
+ * whose link was successfully generated; it is `null` for processing
+ * torrents or when link generation failed (the torrent is still shown).
+ */
+export interface StatusEntry {
+	torrent: TorboxTorrent;
+	url: string | null;
 }
 
-/** Build the /status message. Never includes download URLs or file paths. */
-export function formatStatusMessage(torrents: readonly TorboxTorrent[]): string {
-	if (torrents.length === 0) {
+/**
+ * Format one status line. Ready torrents with a URL get a concise
+ * `[Download](url)` link on its own line; processing torrents and failed
+ * link generations show status metadata only — never a placeholder link.
+ */
+function formatTorrentLine(entry: StatusEntry, index: number): string {
+	const parts: string[] = [
+		formatBytes(entry.torrent.size),
+		sanitizeInline(entry.torrent.download_state, 30),
+		`${progressPercent(entry.torrent.progress)}%`,
+	];
+	if (entry.torrent.seeds > 0) {
+		parts.push(`${entry.torrent.seeds} seeds`);
+	}
+	if (entry.torrent.cached) {
+		parts.push("cached");
+	}
+	const base = `**${index + 1}.** \`${sanitizeInline(entry.torrent.name, 90)}\` — ${parts.join(" · ")}`;
+	if (entry.url) {
+		return `${base}\n[Download](${entry.url})`;
+	}
+	return base;
+}
+
+/**
+ * Build the /status message from enriched entries. Never includes download
+ * URLs for processing torrents, file paths, or magnets. The output is
+ * truncated to Discord's 2000-char content limit.
+ *
+ * @param entries  The (already capped) status entries to display.
+ * @param total    The total number of torrents on the account (may exceed
+ *                 `entries.length` when the list is truncated).
+ */
+export function formatStatusMessage(
+	entries: readonly StatusEntry[],
+	total: number,
+): string {
+	if (total === 0) {
 		return "No downloads on your TorBox account yet.";
 	}
-	const shown = torrents.slice(0, MAX_STATUS_ENTRIES);
+	const shown = entries.slice(0, MAX_STATUS_ENTRIES);
 	const lines = [
-		`**TorBox downloads (${torrents.length} total):**`,
+		`**TorBox downloads (${total} total):**`,
 		...shown.map(formatTorrentLine),
 	];
-	if (torrents.length > shown.length) {
-		lines.push(`_Showing ${shown.length} of ${torrents.length}._`);
+	if (total > shown.length) {
+		lines.push(`_Showing ${shown.length} of ${total}._`);
 	}
 	return truncate(lines.join("\n"), DISCORD_CONTENT_LIMIT);
+}
+
+/**
+ * Generate temporary download links for ready torrents, sequentially and
+ * best-effort. Uses the same rules as the selection workflow
+ * (`selectDownloadTarget`): exactly one file → a direct link; zero or
+ * multiple files → a whole-torrent ZIP link.
+ *
+ * Each link request is isolated: a failure (HTTP, parse, non-HTTPS URL,
+ * timeout) logs a sanitized classification and leaves that entry's URL
+ * `null` so the torrent is still shown without a link. At most
+ * `MAX_STATUS_ENTRIES` requests are made. Requests are sequential to match
+ * the existing component-flow style and avoid overwhelming TorBox.
+ */
+async function enrichWithDownloadLinks(
+	torrents: readonly TorboxTorrent[],
+	apiKey: string,
+	timeoutMs: number,
+): Promise<StatusEntry[]> {
+	const entries: StatusEntry[] = [];
+	for (const torrent of torrents) {
+		let url: string | null = null;
+		if (torrent.download_finished) {
+			try {
+				const target = selectDownloadTarget(torrent);
+				url = await requestDownloadLink({
+					apiKey,
+					timeoutMs,
+					torrentId: torrent.id,
+					...(target.kind === "file"
+						? { fileId: target.file.id }
+						: { zip: true }),
+				});
+			} catch (error) {
+				logUpstreamFailure("status download link failed", error);
+			}
+		}
+		entries.push({ torrent, url });
+	}
+	return entries;
 }
 
 async function completeStatus(
@@ -75,7 +150,13 @@ async function completeStatus(
 			apiKey,
 			timeoutMs: config.upstreamTimeoutMs,
 		});
-		content = formatStatusMessage(torrents);
+		const shown = torrents.slice(0, MAX_STATUS_ENTRIES);
+		const entries = await enrichWithDownloadLinks(
+			shown,
+			apiKey,
+			config.upstreamTimeoutMs,
+		);
+		content = formatStatusMessage(entries, torrents.length);
 	} catch (error) {
 		logUpstreamFailure("status failed", error);
 		content = upstreamErrorMessage(error);
@@ -87,7 +168,9 @@ async function completeStatus(
 /**
  * Handle `/status`. Restricted to members of an authorized Discord guild
  * because the bot is backed by a single TorBox account; the list is that
- * account's data and is only shown ephemerally to authorized users.
+ * account's data and is only shown ephemerally to authorized users. Ready
+ * torrents include temporary TorBox download links; processing torrents
+ * are status-only.
  */
 export function handleStatusCommand(
 	interaction: DiscordInteraction,

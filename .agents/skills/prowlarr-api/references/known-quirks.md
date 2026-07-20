@@ -78,12 +78,15 @@ not a Prowlarr limit.
 
 ## Result count vs selectable count `[impl+tests]`
 
-The Discord `/search` requests `limit: 5` from Prowlarr
-(`MAX_SEARCH_RESULTS`), and the Discord menu is capped at 5 options
-(`SELECT_OPTION_CAP`). These are **separate** constants that happen to both
-be 5. The selectable count can be fewer than 5 (after dedup, empty-label
-filtering, and invalid-hash exclusion) or zero. The internal `/api/search`
-route uses a different limit range (default 5, max 25).
+The Discord `/search` requests 25 releases from Prowlarr
+(`PROWLARR_REQUEST_LIMIT` in `src/commands/search.ts`) to provide headroom
+for duplicate hashes, invalid hashes, and empty labels. The Discord menu is
+capped at 10 options (`SELECT_OPTION_CAP` / `MAX_SEARCH_RESULTS`, both 10 in
+`src/utils/signing.ts` / `src/commands/search.ts`). `buildSelectableOptions`
+scans the Prowlarr results and keeps the first 10 valid, deduplicated,
+non-empty-label releases. The selectable count can be fewer than 10 (after
+dedup, empty-label filtering, and invalid-hash exclusion) or zero. The
+internal `/api/search` route uses a different limit range (default 5, max 25).
 
 If you confirm any `[uncertain]` item with a live instance or official docs,
 update this file and the verification date, and change the tag to

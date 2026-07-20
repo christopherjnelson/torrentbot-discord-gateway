@@ -154,12 +154,19 @@ ephemeral message shows a "Download file" Markdown link followed by the sanitize
 message shows `[Download archive (zip)](<url>)`. This avoids guessing at
 individual files inside a multi-file torrent.
 
+Both the selection workflow (`src/commands/component.ts`) and `/status`
+(`src/commands/status.ts`) reuse `selectDownloadTarget` and
+`requestDownloadLink` for these rules. `/status` shows a concise
+`[Download](<url>)` link per ready torrent (up to 10 entries, sequential
+best-effort requests); processing torrents are status-only.
+
 ## 15. Temporary CDN URLs `[impl+tests]` `[docs 2026-07-20]`
 
 Generated download URLs are temporary CDN links (valid ~3 hours for starting
-a download). They are returned only in the **ephemeral** follow-up to the
+a download). They are returned only in the **ephemeral** message to the
 requester — never in the public search-results message, never logged, never
-persisted.
+persisted. Both the selection follow-up and the `/status` ephemeral response
+follow this rule.
 
 ## 16. HTTPS-only URL validation `[impl+tests]`
 

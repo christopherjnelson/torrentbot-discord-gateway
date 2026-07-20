@@ -311,12 +311,12 @@ async function addAndAwaitDownload(
  * The caller (`completeSearch`) is responsible for producing the
  * selectable set via `buildSelectableOptions(results, SELECT_OPTION_CAP)`,
  * which deduplicates by normalized info hash, drops empty-label results,
- * and caps at five. This function keeps only defensive validation so a
+ * and caps at ten. This function keeps only defensive validation so a
  * malformed payload can never reach Discord:
  * - option label non-empty and <= 100 chars
  * - option value a valid 40-char BTIH hash and <= 100 chars
  * - optional description omitted when empty and <= 100 chars
- * - no more than five options
+ * - no more than ten options
  * - custom_id <= 100 chars
  *
  * Returns null if the selectable set is empty.
@@ -392,7 +392,7 @@ export async function buildSearchComponents(
 				{
 					type: 3, // StringSelect
 					custom_id: customId,
-					placeholder: "Add a result to TorBox",
+					placeholder: "Select a release to download",
 					options,
 				},
 			],

@@ -11,13 +11,12 @@ Discord /search query:<text>
   → authorize guild (TORBOX_ALLOWED_GUILD_IDS; else ephemeral deny)
   → confirm PROWLARR_URL + PROWLARR_API_KEY configured (else ephemeral error)
   → defer (Discord type 5); run the rest in ctx.waitUntil
-  → searchProwlarr(query, { limit: 5 })   [GET /api/v1/search]
+  → searchProwlarr(query, { limit: 25 })   [GET /api/v1/search]
   → normalize each release → TorrentResult
   → sortResults (seeders desc, size desc, title asc, stable)
-  → cap to 5
-  → buildSelectableOptions(results, SELECT_OPTION_CAP=5):
+  → buildSelectableOptions(results, SELECT_OPTION_CAP=10):
        keep valid 40-char-hash results → dedup by lowercased hash
-       → drop empty/whitespace sanitized labels → first 5
+       → drop empty/whitespace sanitized labels → first 10
   → enrichWithCacheStatus(selectable)  [advisory TorBox cache check]
   → buildSearchComponents(selectable) → Discord select menu (if signing configured)
   → editOriginalResponse with content + components
@@ -61,14 +60,17 @@ user later selects a result from the menu (the component interaction flow in
 
 ## Result limit handling `[impl+tests]`
 
-- Discord `/search` requests `limit: 5` from Prowlarr
-  (`MAX_SEARCH_RESULTS = 5` in `src/commands/search.ts`).
-- The Discord select menu is capped at 5 options
-  (`SELECT_OPTION_CAP = 5` in `src/utils/signing.ts`).
-- These are **separate** constants that both equal 5. The service clamps any
+- Discord `/search` requests 25 releases from Prowlarr
+  (`PROWLARR_REQUEST_LIMIT = 25` in `src/commands/search.ts`) to provide
+  headroom for duplicates, invalid hashes, and empty labels.
+- The Discord select menu is capped at 10 options
+  (`SELECT_OPTION_CAP = 10` in `src/utils/signing.ts`,
+  `MAX_SEARCH_RESULTS = 10` in `src/commands/search.ts`).
+- `buildSelectableOptions` scans the Prowlarr results and keeps the first
+  10 valid, deduplicated, non-empty-label releases. The service clamps any
   `limit` to 1–100 (`DEFAULT_LIMIT=25`, `MAX_LIMIT=100`).
-- After sorting, results are sliced to `limit`. The selectable set can be
-  fewer than 5 (dedup, empty-label, invalid-hash filtering) or zero.
+- The selectable set can be fewer than 10 (dedup, empty-label, invalid-hash
+  filtering) or zero.
 - Internal `/api/search` route: default limit 5, max 25
   (`DEFAULT_SEARCH_LIMIT`/`MAX_SEARCH_LIMIT` in `src/routes/api.ts`).
 

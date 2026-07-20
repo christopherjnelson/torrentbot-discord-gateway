@@ -92,8 +92,8 @@ describe("buildSelectableOptions", () => {
 		expect(out.map((r) => r.title)).toEqual(["````", "Valid"]);
 	});
 
-	it("continues scanning later results to fill the five-option cap", () => {
-		// 3 valid-hash results with empty labels, then 5 valid results.
+	it("continues scanning later results to fill the ten-option cap", () => {
+		// 3 valid-hash results with empty labels, then 10 valid results.
 		const input = [
 			result("   ", HASH_A),
 			result("", HASH_B),
@@ -103,15 +103,17 @@ describe("buildSelectableOptions", () => {
 			result("R3", "3333333333333333333333333333333333333333"),
 			result("R4", "4444444444444444444444444444444444444444"),
 			result("R5", "5555555555555555555555555555555555555555"),
+			result("R6", "6666666666666666666666666666666666666666"),
+			result("R7", "7777777777777777777777777777777777777777"),
+			result("R8", "8888888888888888888888888888888888888888"),
+			result("R9", "9999999999999999999999999999999999999999"),
+			result("R10", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 		];
 		const out = buildSelectableOptions(input, SELECT_OPTION_CAP);
-		expect(out).toHaveLength(5);
+		expect(out).toHaveLength(10);
 		expect(out.map((r) => r.title)).toEqual([
-			"R1",
-			"R2",
-			"R3",
-			"R4",
-			"R5",
+			"R1", "R2", "R3", "R4", "R5",
+			"R6", "R7", "R8", "R9", "R10",
 		]);
 	});
 

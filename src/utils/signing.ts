@@ -33,7 +33,7 @@ export const DISCORD_ID_LIMIT = 100;
 /** Max options allowed by Discord for a string select. */
 export const MAX_SELECT_OPTIONS = 25;
 /** Max options used by this feature's select menu. */
-export const SELECT_OPTION_CAP = 5;
+export const SELECT_OPTION_CAP = 10;
 
 export interface ComponentPayload {
 	userId: string;

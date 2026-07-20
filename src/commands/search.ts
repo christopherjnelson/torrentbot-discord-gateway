@@ -30,7 +30,14 @@ import {
 import { buildSelectableOptions } from "../utils/selectable";
 
 export const SEARCH_COMMAND_NAME = "search";
-export const MAX_SEARCH_RESULTS = 5;
+export const MAX_SEARCH_RESULTS = 10;
+/**
+ * Number of releases to request from Prowlarr. Higher than the selectable
+ * cap (MAX_SEARCH_RESULTS) to provide headroom for duplicate hashes,
+ * invalid hashes, and empty labels, so `buildSelectableOptions` can still
+ * fill the cap. The Prowlarr service clamps this to 1–100.
+ */
+const PROWLARR_REQUEST_LIMIT = 25;
 const MAX_QUERY_LENGTH = 200;
 /** Discord select-option description hard limit. */
 const DESCRIPTION_LIMIT = 100;
@@ -168,13 +175,13 @@ async function completeSearch(
 			apiKey,
 			baseUrl,
 			timeoutMs: config.upstreamTimeoutMs,
-			limit: MAX_SEARCH_RESULTS,
+			limit: PROWLARR_REQUEST_LIMIT,
 		});
 		content = formatSearchResults(query, results);
 
 		// Single authoritative selectable sequence:
 		// Prowlarr results -> valid hashes -> deduplicate by normalized
-		// hash -> remove unusable labels -> continue scanning until five
+		// hash -> remove unusable labels -> continue scanning until ten
 		// valid options. The cache check, annotation, and menu all use
 		// this exact array.
 		const selectable = buildSelectableOptions(results, SELECT_OPTION_CAP);
