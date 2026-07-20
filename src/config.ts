@@ -22,7 +22,11 @@ export interface AppConfig {
 	internalApiToken: string | undefined;
 	/** Discord user IDs allowed to run /add and /status. */
 	torboxAllowedUserIds: string[];
+	/** Timeout applied to Voyager/TorBox upstream calls. */
+	upstreamTimeoutMs: number;
 }
+
+const DEFAULT_UPSTREAM_TIMEOUT_MS = 10_000;
 
 function readString(value: unknown): string | undefined {
 	if (typeof value !== "string") {
@@ -30,6 +34,14 @@ function readString(value: unknown): string | undefined {
 	}
 	const trimmed = value.trim();
 	return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function readTimeoutMs(value: unknown): number {
+	const parsed = Number.parseInt(readString(value) ?? "", 10);
+	if (!Number.isFinite(parsed) || parsed < 1 || parsed > 60_000) {
+		return DEFAULT_UPSTREAM_TIMEOUT_MS;
+	}
+	return parsed;
 }
 
 export function getConfig(env: Env): AppConfig {
@@ -43,6 +55,7 @@ export function getConfig(env: Env): AppConfig {
 			.split(",")
 			.map((id) => id.trim())
 			.filter((id) => id.length > 0),
+		upstreamTimeoutMs: readTimeoutMs(env.UPSTREAM_TIMEOUT_MS),
 	};
 }
 

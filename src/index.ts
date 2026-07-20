@@ -1,98 +1,35 @@
-import {
-InteractionResponseType,
-InteractionType,
-verifyKey,
-} from "discord-interactions";
+import { errorResponse } from "./discord/responses";
+import { handleDiscordInteractions } from "./routes/discord";
 
-function jsonResponse(body: unknown, status = 200): Response {
-return Response.json(body, { status });
-}
-
+/**
+ * TorrentBot Discord gateway.
+ *
+ * Routes:
+ * - GET  /                      health check
+ * - POST /discord/interactions  Discord interaction webhook (Ed25519 verified)
+ * - /api/*                      internal authenticated HTTP API (see routes/api)
+ */
 const handler: ExportedHandler<Env> = {
-async fetch(request, env): Promise<Response> {
-const url = new URL(request.url);
+	async fetch(request, env, ctx): Promise<Response> {
+		const url = new URL(request.url);
 
-if (request.method === "GET" && url.pathname === "/") {
-return jsonResponse({
-ok: true,
-service: "torrentbot-discord-gateway",
-status: "healthy",
-});
-}
+		if (request.method === "GET" && url.pathname === "/") {
+			return Response.json({
+				ok: true,
+				service: "torrentbot-discord-gateway",
+				status: "healthy",
+			});
+		}
 
-if (
-request.method === "POST" &&
-url.pathname === "/discord/interactions"
-) {
-const signature = request.headers.get("x-signature-ed25519");
-const timestamp = request.headers.get("x-signature-timestamp");
+		if (
+			request.method === "POST" &&
+			url.pathname === "/discord/interactions"
+		) {
+			return handleDiscordInteractions(request, env, ctx);
+		}
 
-if (!signature || !timestamp) {
-return jsonResponse(
-{
-ok: false,
-error: "Missing Discord signature headers",
-},
-401,
-);
-}
-
-const rawBody = await request.text();
-
-const isValidRequest = await verifyKey(
-rawBody,
-signature,
-timestamp,
-env.DISCORD_PUBLIC_KEY,
-);
-
-if (!isValidRequest) {
-return jsonResponse(
-{
-ok: false,
-error: "Invalid request signature",
-},
-401,
-);
-}
-
-let interaction: { type?: number };
-
-try {
-interaction = JSON.parse(rawBody) as { type?: number };
-} catch {
-return jsonResponse(
-{
-ok: false,
-error: "Invalid JSON body",
-},
-400,
-);
-}
-
-if (interaction.type === InteractionType.PING) {
-return jsonResponse({
-type: InteractionResponseType.PONG,
-});
-}
-
-return jsonResponse(
-{
-ok: false,
-error: "Unsupported interaction type",
-},
-400,
-);
-}
-
-return jsonResponse(
-{
-ok: false,
-error: "Not found",
-},
-404,
-);
-},
+		return errorResponse("Not found", 404);
+	},
 };
 
 export default handler;
