@@ -40,7 +40,9 @@ describe("component signing utility", () => {
 		const parsed = await parseAndVerifyCustomId(customId, TEST_SIGNING_SECRET);
 		expect(parsed).not.toBeNull();
 		expect(parsed?.userId).toBe("user-1");
-		expect(parsed?.infoHash).toBe("a".repeat(40));
+		// The info hash is carried separately in the option value, not the
+		// signed custom_id, so it is not round-tripped here.
+		expect(parsed?.infoHash).toBe("");
 	});
 
 	it("rejects tampered payloads", async () => {
@@ -112,6 +114,7 @@ describe("component interaction handling", () => {
 	});
 
 	it("rejects tampered custom_id", async () => {
+		const { captured } = interceptOriginalResponseEdit();
 		const { response, ctx } = await dispatchInteraction(
 			JSON.stringify(
 				makeComponentInteraction({
@@ -127,11 +130,8 @@ describe("component interaction handling", () => {
 		const body = await response.json() as { data: { content: string } };
 		expect(body.data.content).toContain("Adding to TorBox");
 
-		// Wait for background processing and mock the Discord API
-		const { captured } = interceptOriginalResponseEdit();
 		await waitOnExecutionContext(ctx);
 
-		// The background process should edit the message with an error
 		expect(captured.length).toBeGreaterThan(0);
 		expect(captured[0].body.content).toContain("expired or is invalid");
 	});
@@ -139,6 +139,7 @@ describe("component interaction handling", () => {
 	it("rejects wrong user", async () => {
 		const payload = createPayload("other-user", "");
 		const customId = await buildCustomId(payload, TEST_SIGNING_SECRET);
+		const { captured } = interceptOriginalResponseEdit();
 		const { response, ctx } = await dispatchInteraction(
 			JSON.stringify(
 				makeComponentInteraction({
@@ -154,7 +155,6 @@ describe("component interaction handling", () => {
 		const body = await response.json() as { data: { content: string } };
 		expect(body.data.content).toContain("Adding to TorBox");
 
-		const { captured } = interceptOriginalResponseEdit();
 		await waitOnExecutionContext(ctx);
 
 		expect(captured.length).toBeGreaterThan(0);
@@ -164,6 +164,7 @@ describe("component interaction handling", () => {
 	it("rejects non-allowlisted user", async () => {
 		const payload = createPayload(TEST_USER_ID, "");
 		const customId = await buildCustomId(payload, TEST_SIGNING_SECRET);
+		const { captured } = interceptOriginalResponseEdit();
 		const { response, ctx } = await dispatchInteraction(
 			JSON.stringify(
 				makeComponentInteraction({
@@ -182,7 +183,6 @@ describe("component interaction handling", () => {
 		const body = await response.json() as { data: { content: string } };
 		expect(body.data.content).toContain("Adding to TorBox");
 
-		const { captured } = interceptOriginalResponseEdit();
 		await waitOnExecutionContext(ctx);
 
 		expect(captured.length).toBeGreaterThan(0);
@@ -215,6 +215,7 @@ describe("component interaction handling", () => {
 	it("rejects when TorBox is not configured", async () => {
 		const payload = createPayload(TEST_USER_ID, "");
 		const customId = await buildCustomId(payload, TEST_SIGNING_SECRET);
+		const { captured } = interceptOriginalResponseEdit();
 		const { response, ctx } = await dispatchInteraction(
 			JSON.stringify(
 				makeComponentInteraction({
@@ -234,7 +235,6 @@ describe("component interaction handling", () => {
 		const body = await response.json() as { data: { content: string } };
 		expect(body.data.content).toContain("Adding to TorBox");
 
-		const { captured } = interceptOriginalResponseEdit();
 		await waitOnExecutionContext(ctx);
 
 		expect(captured.length).toBeGreaterThan(0);

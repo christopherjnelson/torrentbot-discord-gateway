@@ -1,5 +1,8 @@
 import { getConfig, isAllowedTorboxUser, type AppConfig } from "../config";
-import { editOriginalResponse } from "../discord/client";
+import {
+	editOriginalResponse,
+	DiscordApiError,
+} from "../discord/client";
 import {
 	messageResponse,
 } from "../discord/responses";
@@ -18,6 +21,9 @@ import {
 	parseAndVerifyCustomId,
 	createPayload,
 	buildCustomId,
+	DISCORD_ID_LIMIT,
+	MAX_SELECT_OPTIONS,
+	SELECT_OPTION_CAP,
 } from "../utils/signing";
 
 /**
@@ -48,20 +54,6 @@ export function handleComponentInteraction(
 		);
 	}
 
-	// Parse and verify the signed custom_id (async, but we need to return
-	// synchronously). We'll do the verification in the background and
-	// acknowledge immediately.
-	// Actually, we need to verify synchronously to reject invalid requests.
-	// Let me restructure this...
-
-	// For now, let me use a different approach: do the verification
-	// synchronously by making parseAndVerifyCustomId synchronous.
-	// Actually, HMAC verification requires crypto.subtle which is async.
-
-	// The correct approach is to acknowledge the interaction immediately
-	// (within 3 seconds), then do the verification and processing.
-	// If the verification fails, we edit the original response with an error.
-
 	// Get the selected info hash from the option value first (quick validation).
 	const selectedHash = data.values?.[0];
 	if (!selectedHash || !isValidHash(selectedHash)) {
@@ -81,6 +73,20 @@ export function handleComponentInteraction(
 	);
 }
 
+/** Log a Discord edit failure with only sanitized diagnostics. */
+function logDiscordEditFailure(error: unknown): void {
+	if (error instanceof DiscordApiError) {
+		console.warn("failed to edit interaction response: discord API error", {
+			status: error.status,
+			code: error.code,
+			message: error.discordMessage,
+			fieldErrors: error.fieldErrors,
+		});
+		return;
+	}
+	logUpstreamFailure("failed to edit interaction response", error);
+}
+
 async function processComponentInteraction(
 	interaction: DiscordInteraction,
 	data: ComponentData,
@@ -93,32 +99,50 @@ async function processComponentInteraction(
 		config.componentSigningSecret as string,
 	);
 	if (!payload) {
-		await editOriginalResponse(
-			interaction.application_id,
-			interaction.token,
-			{ content: "This selection has expired or is invalid. Please run `/search` again." },
-		);
+		try {
+			await editOriginalResponse(
+				interaction.application_id,
+				interaction.token,
+				{
+					content:
+						"This selection has expired or is invalid. Please run `/search` again.",
+				},
+			);
+		} catch (error) {
+			logDiscordEditFailure(error);
+		}
 		return;
 	}
 
 	// Check that the selecting user is the original requester.
 	const invokerId = getInvokerId(interaction);
 	if (invokerId !== payload.userId) {
-		await editOriginalResponse(
-			interaction.application_id,
-			interaction.token,
-			{ content: "You cannot use someone else's search result menu." },
-		);
+		try {
+			await editOriginalResponse(
+				interaction.application_id,
+				interaction.token,
+				{ content: "You cannot use someone else's search result menu." },
+			);
+		} catch (error) {
+			logDiscordEditFailure(error);
+		}
 		return;
 	}
 
 	// Check allowlist.
 	if (!isAllowedTorboxUser(config, invokerId)) {
-		await editOriginalResponse(
-			interaction.application_id,
-			interaction.token,
-			{ content: "You are not authorized to add downloads on this bot." },
-		);
+		try {
+			await editOriginalResponse(
+				interaction.application_id,
+				interaction.token,
+				{
+					content:
+						"You are not authorized to add downloads on this bot.",
+				},
+			);
+		} catch (error) {
+			logDiscordEditFailure(error);
+		}
 		return;
 	}
 
@@ -127,11 +151,15 @@ async function processComponentInteraction(
 
 	// Check TorBox is configured.
 	if (!config.torboxApiKey) {
-		await editOriginalResponse(
-			interaction.application_id,
-			interaction.token,
-			{ content: "TorBox is not configured on this bot." },
-		);
+		try {
+			await editOriginalResponse(
+				interaction.application_id,
+				interaction.token,
+				{ content: "TorBox is not configured on this bot." },
+			);
+		} catch (error) {
+			logDiscordEditFailure(error);
+		}
 		return;
 	}
 
@@ -144,41 +172,9 @@ async function processComponentInteraction(
 		});
 		content =
 			"Added to TorBox.\n" +
-			`**ID:** \`${created.torrent_id}\`\n` +
-			`**Hash:** \`${sanitizeInline(created.hash, 64)}\``;
-	} catch (error) {
-		logUpstreamFailure("component add failed", error);
-		content = upstreamErrorMessage(error);
-	}
-
-	// Edit the original response with the result and disable components.
-	try {
-		await editOriginalResponse(
-			interaction.application_id,
-			interaction.token,
-			{ content, components: [] },
-		);
-	} catch (error) {
-		logUpstreamFailure("failed to edit interaction response", error);
-	}
-}
-
-async function completeComponentAdd(
-	interaction: DiscordInteraction,
-	magnetUri: string,
-	infoHash: string,
-	config: AppConfig,
-): Promise<void> {
-	let content: string;
-	try {
-		const created = await createTorrent(magnetUri, {
-			apiKey: config.torboxApiKey as string,
-			timeoutMs: config.upstreamTimeoutMs,
-		});
-		content =
 			"Added to TorBox.\n" +
-			`**ID:** \`${created.torrent_id}\`\n` +
-			`**Hash:** \`${sanitizeInline(created.hash, 64)}\``;
+			"**ID:** `" + created.torrent_id + "`\n" +
+			"**Hash:** `" + sanitizeInline(created.hash, 64) + "`";
 	} catch (error) {
 		logUpstreamFailure("component add failed", error);
 		content = upstreamErrorMessage(error);
@@ -192,12 +188,8 @@ async function completeComponentAdd(
 			{ content, components: [] },
 		);
 	} catch (error) {
-		logUpstreamFailure("failed to edit interaction response", error);
+		logDiscordEditFailure(error);
 	}
-}
-
-function isValidHash(hash: string): boolean {
-	return /^[a-fA-F0-9]{40}$/.test(hash);
 }
 
 /**
@@ -211,7 +203,7 @@ export async function buildSearchComponents(
 ): Promise<object[] | null> {
 	const selectable = results
 		.filter((r) => r.infoHash && isValidHash(r.infoHash))
-		.slice(0, 5);
+		.slice(0, SELECT_OPTION_CAP);
 
 	if (selectable.length === 0) {
 		return null;
@@ -225,11 +217,32 @@ export async function buildSearchComponents(
 	// Each option's value is the info hash directly. The custom_id signature
 	// validates the user and expiry; the option value is validated as a
 	// proper info hash before use.
-	const options = selectable.map((result) => ({
-		label: sanitizeInline(result.title, 100),
-		value: result.infoHash as string,
-		description: `Hash: ${(result.infoHash as string).slice(0, 16)}...`,
-	}));
+	const options = selectable.map((result) => {
+		const rawLabel = sanitizeInline(result.title, 100);
+		const value = result.infoHash as string;
+		if (value.length > DISCORD_ID_LIMIT) {
+			throw new Error("select option value exceeds Discord 100-char limit");
+		}
+		if (rawLabel.length > DISCORD_ID_LIMIT) {
+			throw new Error("select option label exceeds Discord 100-char limit");
+		}
+		return {
+			label: rawLabel,
+			value,
+			description: `Hash: ${value.slice(0, 16)}...`,
+		};
+	});
+
+	// Fail-safe invariant checks before sending to Discord.
+	if (customId.length > DISCORD_ID_LIMIT) {
+		throw new Error("search select custom_id exceeds Discord 100-char limit");
+	}
+	if (options.length > MAX_SELECT_OPTIONS) {
+		throw new Error("too many select options for Discord");
+	}
+	if (options.length > SELECT_OPTION_CAP) {
+		throw new Error("search select exceeds feature option cap");
+	}
 
 	return [
 		{
@@ -244,4 +257,8 @@ export async function buildSearchComponents(
 			],
 		},
 	];
+}
+
+function isValidHash(hash: string): boolean {
+	return /^[a-fA-F0-9]{40}$/.test(hash);
 }
