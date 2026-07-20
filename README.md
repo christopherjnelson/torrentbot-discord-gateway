@@ -12,13 +12,13 @@ Discord (slash commands)
 Cloudflare Worker ─────────────────────────────┐
    │                                           │
    ├─► Prowlarr API (search)                   │
-   │    GET prowlarr.chris.guru/api/v1/search  │
+   │    GET prowlarr.example.com/api/v1/search │
    │                                           │
    ├─► TorBox API (add/status)                 │
    │    POST api.torbox.app/v1/api/torrents/…  │
    │                                           │
    └─► Discord follow-up webhooks              │
-        PATCH …/webhooks/{app}/{token}/…       │
+         PATCH …/webhooks/{app}/{token}/…       │
                                                 │
 n8n / automation ──► /api/* (Bearer auth) ──────┘
 ```
@@ -26,6 +26,17 @@ n8n / automation ──► /api/* (Bearer auth) ──────┘
 Search goes directly to Prowlarr; torrent management goes directly to TorBox.
 The TorBox Voyager/Torznab endpoint (`search-api.torbox.app`) is **not** used
 and no Voyager API key is required.
+
+## Quick Start
+
+Get TorrentBot up and running in 6 steps:
+
+1. **Install dependencies**: Clone the repository and run `npm install`.
+2. **Configure local environment**: Copy `.dev.vars.example` to `.dev.vars` and fill in your development keys and IDs.
+3. **Set Cloudflare secrets**: Configure production secrets using `npx wrangler secret put <NAME>` for keys like `DISCORD_PUBLIC_KEY`, `PROWLARR_API_KEY`, and others.
+4. **Deploy the Worker**: Run `npm run deploy` to publish the gateway to Cloudflare Workers.
+5. **Register commands**: Run `npm run discord:register` to publish the slash commands to your Discord guild.
+6. **Test in Discord**: Configure the Interactions Endpoint URL in your Discord Developer Portal, then run a search (e.g. `/search example`) to verify.
 
 ## Implemented commands and routes
 
@@ -88,6 +99,8 @@ When an authorized member selects a result, the bot:
 Component interactions are signed with HMAC-SHA-256 to prevent tampering and
 bind the selection to the original requester.
 
+## Detailed Workflows
+
 ### TorBox download flow
 
 A selection produces one of these ephemeral responses:
@@ -97,9 +110,9 @@ A selection produces one of these ephemeral responses:
 ```
 Added to TorBox.
 
-**Backrooms (2026) [1080p]**
+**Example Release (2026) [1080p]**
 Ready to download:
-[Download file](https://…) — `Backrooms.2026.1080p.mkv` (1.4 GiB)
+[Download file](https://…) — `Example.Release.2026.1080p.mkv` (1.4 GiB)
 ```
 
 For a multi-file torrent the bot returns a whole-torrent zip archive link
@@ -119,7 +132,7 @@ Ready to download (12 files):
 ```
 Added to TorBox.
 
-**Backrooms (2026) [1080p]**
+**Example Release (2026) [1080p]**
 TorBox is still processing this torrent (ID `42`). Use `/status` to check it later.
 ```
 
@@ -170,18 +183,18 @@ for one torrent, that torrent is still shown without a link and the rest of
 the list is unaffected. Generated links are temporary CDN URLs (~3 hours),
 shown only in the ephemeral response, never logged, and never persisted.
 
-## Setup
+## Setup & Configuration
 
-### 1. Prerequisites
+### Prerequisites
 
 - Node.js 22+ and npm
 - A Cloudflare account with Workers enabled
 - A Discord account and a Discord application (below)
 - A running Prowlarr instance reachable from Cloudflare (this deployment uses
-  `https://prowlarr.chris.guru`) with its API key
+  `https://prowlarr.example.com`) with its API key
 - A TorBox account with an API key (only needed for `/add` and `/status`)
 
-### 2. Discord application setup
+### Discord application setup
 
 1. Create an application at <https://discord.com/developers/applications>.
 2. Note the **Application ID** and **Public Key** (General Information).
@@ -192,7 +205,7 @@ shown only in the ephemeral response, never logged, and never persisted.
 5. Note your guild (server) ID: Discord client → right-click server →
    "Copy Server ID" (requires Developer Mode).
 
-### 3. Prowlarr setup
+### Prowlarr setup
 
 1. In Prowlarr, add and test your indexers (Settings → Indexers) and confirm
    a manual search in the Prowlarr UI returns results.
@@ -200,21 +213,18 @@ shown only in the ephemeral response, never logged, and never persisted.
 3. Verify the instance independently (replace host and key):
 
 ```sh
-curl -sS "https://prowlarr.chris.guru/api/v1/search?query=ubuntu&limit=2" \
+curl -sS "https://prowlarr.example.com/api/v1/search?query=example&limit=2" \
   -H "X-Api-Key: $PROWLARR_API_KEY" | head -c 600
 ```
 
 A valid key returns a JSON array of releases (`title`, `size`, `seeders`,
 `leechers`, `indexer`, `infoHash`, …). A missing/invalid key returns `401`.
-`https://prowlarr.chris.guru/ping` answers `{"status":"OK"}` without a key
+`https://prowlarr.example.com/ping` answers `{"status":"OK"}` without a key
 and is a quick liveness check.
 
-### 4. Local configuration
+### Configuration Variables
 
-```sh
-npm install
-cp .dev.vars.example .dev.vars
-```
+#### Local Environment (`.dev.vars`)
 
 Fill in `.dev.vars` (never commit it — it is git-ignored):
 
@@ -234,7 +244,7 @@ Fill in `.dev.vars` (never commit it — it is git-ignored):
 | `TORBOX_POLL_INTERVAL_MS` | var | Optional delay between TorBox readiness polls after a selection (default `2500`, range 250–10000) |
 | `TORBOX_POLL_MAX_ATTEMPTS` | var | Optional cap on TorBox readiness polls after a selection (default `7`, range 1–20) |
 
-### 5. Cloudflare production configuration
+#### Cloudflare Production Secrets
 
 Secrets (values never appear in the repo or in logs):
 
@@ -247,8 +257,7 @@ npx wrangler secret put COMPONENT_SIGNING_SECRET
 npx wrangler secret put TORBOX_ALLOWED_GUILD_IDS
 ```
 
-The `COMPONENT_SIGNING_SECRET` is used to sign and verify Discord component
-interaction payloads (the select menu in `/search` results). Generate it with:
+Generate the `COMPONENT_SIGNING_SECRET` with:
 
 ```sh
 openssl rand -hex 32
@@ -259,51 +268,62 @@ IDs; every member of an approved guild can use `/search`, `/add`, `/status`,
 and the search-result selection flow. Enter multiple IDs as a single
 comma-separated value (e.g. `123456789012345678,987654321098765432`). Each
 entry must be a snowflake-style decimal string; missing/empty/malformed
-configuration denies all Discord TorBox access. It is a Worker secret (not a
-`wrangler.jsonc` var) so real guild IDs never land in tracked files. Direct
-messages are not supported.
+configuration denies all Discord TorBox access. Direct messages are not supported.
 
 Non-secret vars live in `wrangler.jsonc` (`PROWLARR_URL`,
 `UPSTREAM_TIMEOUT_MS`, `TORBOX_POLL_INTERVAL_MS`, `TORBOX_POLL_MAX_ATTEMPTS`)
 and can be edited there or in the Cloudflare dashboard.
 
-### 6. Register the Discord commands
+## Deployment Checklist
 
-```sh
-npm run discord:register    # idempotent guild-scoped PUT
-npm run discord:unregister  # removes all guild commands
-```
+1. Create the Discord application/guild, Prowlarr instance, and TorBox account.
+2. Add real IDs and API keys to `.dev.vars` for local development.
+3. Add production secrets to Cloudflare (`wrangler secret put …`) and verify the `PROWLARR_URL` in `wrangler.jsonc`.
+4. Run `npm run discord:register` to register slash commands in your Discord guild.
+5. Deploy the worker with `npm run deploy`.
+6. Enter the Interactions Endpoint URL in the Discord Developer Portal.
+7. First real search: run `/search example` in Discord and confirm the Worker returns results (verified via Prowlarr's History search log).
 
-Registration is guild-scoped (instant propagation) and safe to re-run. Global
-commands are never touched.
+## Security Model
 
-### 7. Run and deploy
+TorrentBot is designed with a strict zero-trust security architecture:
 
-```sh
-npm run dev        # local development via wrangler dev
-npm run deploy     # deploy to Cloudflare
-```
+- **Guild Authorization**: Access to commands (`/search`, `/add`, `/status`) and search result menus is restricted to Discord guilds explicitly listed in `TORBOX_ALLOWED_GUILD_IDS`. Direct messages and unauthorized guilds are rejected, and the bot fails closed.
+- **Ephemeral Responses**: Sensitive actions, such as `/status` listings or generated TorBox download links, are delivered strictly as **ephemeral** Discord responses, meaning they are only visible to the initiating user.
+- **API-Key Secrecy**: 
+  - **Prowlarr API**: Authenticated via the `X-Api-Key` header, never exposed in URLs or logs.
+  - **TorBox API**: Authenticated via a bearer token. The documented permalink structure that embeds API keys in download links is strictly avoided.
+  - **Internal API**: Routes require authentication via `Authorization: Bearer <INTERNAL_API_TOKEN>`, verified using constant-time comparison (SHA-256 pre-hashed).
+- **Proxy-URL Defense**: Prowlarr-returned proxy download/magnet URLs that embed API keys are never propagated, logged, or exposed. Instead, magnets are parsed and reconstructed cleanly from info hashes.
+- **HTTPS-Only Downloads**: Only `https:` URLs returned by TorBox are accepted for temporary download and zip archive links.
+- **No-Logging Rules**: Sensitive parameters (interaction tokens, API keys, full magnet URIs, temporary download URLs, and raw payloads) are never logged. Upstream errors are wrapped so they never leak endpoint URLs or credentials.
+- **Signed Component Payloads**: Interactive select menus from `/search` are signed using HMAC-SHA-256 with `COMPONENT_SIGNING_SECRET`. The signature binds the payload to the original requester, preventing tampering and preventing other members in the guild from selecting someone else's search option. Component payloads expire after 15 minutes.
+- **Safe Mentions**: All bot messages disable mention parsing (`allowed_mentions: { parse: [] }`) to prevent mention abuse or accidental notifications.
 
-After deploying, set the **Interactions Endpoint URL** in the Discord
-Developer Portal to:
+## Local Development & Testing
 
-```
-https://<your-worker>.<your-subdomain>.workers.dev/discord/interactions
-```
+All development and verification scripts are managed via npm:
 
-Discord verifies the endpoint with a signed PING, which the Worker answers
-with PONG.
+| Command | Description |
+| --- | --- |
+| `npm run dev` | Starts the local Wrangler development server for real-time testing. |
+| `npm test` | Runs the full Vitest test suite inside a simulated Cloudflare Workers environment. |
+| `npm run typecheck` | Runs strict TypeScript compiler checks on both `src/` and `test/` codebases. |
+| `npm run cf-typegen` | Regenerates `worker-configuration.d.ts` typescript bindings from `wrangler.jsonc`. |
+| `npm run deploy` | Deploys the application directly to Cloudflare Workers. |
+| `npm run deploy -- --dry-run` | Validates and builds the deployment bundle locally without uploading. |
+| `npm run discord:register` | Registers the bot's slash commands to the designated Discord guild. |
+| `npm run discord:unregister` | Unregisters/removes the guild slash commands. |
 
-## Development
+### Testing details
 
-```sh
-npm test -- --run     # run the test suite once
-npm run typecheck     # strict TypeScript over src and test
-npm run cf-typegen    # regenerate worker-configuration.d.ts after binding changes
-npm run deploy -- --dry-run   # validate the deploy bundle locally
-```
+`npm test` runs Vitest inside a real Worker runtime (`@cloudflare/vitest-pool-workers`). Outbound HTTP requests are fully mocked via `fetchMock`, ensuring tests never call Discord, Prowlarr, or TorBox APIs directly. Signed Discord request payloads are produced deterministically using a generated Ed25519 key pair, preserving complete signature verification in test assertions.
 
-Project layout:
+The 245 tests cover health checks, signature validation, command routing, deferred responses, upstream Prowlarr/TorBox API error/timeout scenarios, credential safety, and internal API endpoints.
+
+## For Developers
+
+### Project layout
 
 ```
 src/
@@ -319,133 +339,17 @@ test/                 vitest + @cloudflare/vitest-pool-workers
 scripts/              register-commands.mjs
 ```
 
-## Testing
+### External API assumptions
 
-`npm test` runs Vitest inside a real Worker runtime
-(`@cloudflare/vitest-pool-workers`). Outbound HTTP is mocked with
-`fetchMock`; tests never contact Discord, Prowlarr, or TorBox. Signed Discord
-requests are produced with a generated Ed25519 test key pair — production
-verification is not weakened for tests.
+Development assumes verified behaviors for Discord (Ed25519 interactions, deferring, ephemeral responses, component interactions), Prowlarr (search endpoint parameter shapes and category mapping), and TorBox (add, mylist list caching, download URL request shapes, and cache-check endpoints). For detailed documentation of these assumptions, external contracts, and API structures, refer to the **Agent Skills** in `.agents/skills/`.
 
-Coverage includes: health/404s, unsigned/invalid-signature rejection, valid
-PING→PONG, command routing, missing/malformed options, deferred responses and
-follow-up edits, Prowlarr success/empty/401/500/timeout/malformed-JSON, URL
-and `X-Api-Key` header construction, credential-bearing proxy-URL rejection,
-deterministic ordering and limits, formatting limits, magnet validation,
-TorBox success/duplicate/auth-failure/timeout, and internal API
-authentication.
+### Agent skills
 
-## Security model
+Before modifying the integrations, consult the tracked agent skills:
+- **TorBox API**: Read [`.agents/skills/torbox-api/SKILL.md`](.agents/skills/torbox-api/SKILL.md) for contracts, completion rules, cache-check details, and credentials safety.
+- **Prowlarr API**: Read [`.agents/skills/prowlarr-api/SKILL.md`](.agents/skills/prowlarr-api/SKILL.md) for search normalization, proxy-URL security, and cache-enrichment details.
 
-- **Discord**: every interaction request must carry a valid Ed25519 signature
-  over `timestamp + body` from the application's public key.
-- **Internal API**: `Authorization: Bearer <INTERNAL_API_TOKEN>` with a
-  constant-time comparison (SHA-256 pre-hashed before the compare loop).
-- **TorBox authorization**: `/search`, `/add`, and `/status` are restricted
-  to members of Discord guilds listed in `TORBOX_ALLOWED_GUILD_IDS` and
-  reply ephemerally. Direct messages are rejected. Every member of an
-  approved guild may run these commands.
-- **Component interaction authorization**: select menu interactions from
-  `/search` results are restricted to the original requester (verified via
-  HMAC-SHA-256 signed payloads) and must originate from an authorized
-  guild. A valid signed component used in a DM or another server is
-  rejected. The signing secret is `COMPONENT_SIGNING_SECRET`. Payloads
-  expire after 15 minutes. The original requester binding is preserved:
-  even within an authorized guild, only the user who created a particular
-  search menu may select from it.
-- **No secret logging**: interaction tokens, bot tokens, API keys,
-  authorization headers, full magnet URIs, generated download URLs, and raw
-  interaction payloads are never logged. Upstream error types never carry
-  request URLs (which can contain credentials).
-- **Prowlarr proxy URLs**: Prowlarr rewrites `downloadUrl`/`magnetUrl` in
-  search responses into proxy URLs that embed the Prowlarr API key
-  (`/{indexerId}/download?apikey=…`). The adapter never propagates them:
-  magnets are synthesized from the info hash (or passed through only when
-  already a raw `magnet:` URI), and result links come from the un-proxied
-  `infoUrl` field.
-- **TorBox download links**: only `https:` URLs returned by TorBox are
-  accepted; the documented permalink form (which embeds the TorBox API key
-  in the URL) is never used. Links are delivered only in ephemeral
-  followup messages to the requester and never appear in the public search
-  results message.
-- **Mentions**: all bot messages set `allowed_mentions: { parse: [] }`;
-  titles are sanitized and length-capped (Discord's 2000-char limit).
-- **Privacy**: Discord output shows magnet/hash *availability markers* only.
-  Magnet URIs are exposed solely through the authenticated internal API.
-- **Component payloads**: Discord component values and custom_ids are treated
-  as untrusted input. Info hashes from select menu options are validated
-  (40-character hexadecimal) before use. The HMAC signature binds the
-  interaction to the original requester and prevents tampering.
-
-## External API assumptions
-
-Verified (2026-07-19):
-
-- Discord interaction types/callback types, the 3-second initial-response
-  deadline, 15-minute follow-up token validity, the follow-up edit endpoint,
-  the 2000-character content limit, and `allowed_mentions` semantics — from
-  the official Discord developer documentation.
-- Prowlarr search: `GET /api/v1/search` with query params `query`, `type`,
-  `indexerIds`, `categories`, `limit`, `offset`, authenticated via the
-  `X-Api-Key` header — from the official Prowlarr source
-  (`SearchController.cs`, `SearchResource.cs`, `ReleaseResource.cs`,
-  `AuthenticationBuilderExtensions.cs`) and confirmed against the live
-  instance (`/ping` → `{"status":"OK"}`; unauthenticated `/api/v1/search` →
-  401). Response items are normalized tolerantly: only `title` is required;
-  `size`, `seeders`, `leechers`, `categories`, `indexer`, `infoUrl`,
-  `infoHash`, `publishDate`, and `magnetUrl` are all optional.
-- TorBox main API (`https://api.torbox.app/v1/api`): `POST
-  /torrents/createtorrent` (multipart `magnet` field, Bearer auth),
-  `GET /torrents/mylist` (params `id`, `offset`, `limit`, `bypass_cache`;
-  with `id` the docs state the response "will return an object rather than
-  list", which the bot tolerates either shape; `bypass_cache` bypasses the
-  600-second server-side list cache), and `GET /torrents/requestdl` (params
-  `token` (API key), `torrent_id`, `file_id` (optional if `zip_link`),
-  `zip_link` ("required if no file_id; takes precedence over file_id"),
-  `user_ip`, `redirect`, `append_name`; `data` is a temporary CDN URL string)
-  — from the official TorBox API documentation (Postman collection at
-  api-docs.torbox.app and the live OpenAPI spec at api.torbox.app/openapi.json),
-  including the `{success, error, detail, data}` envelope, the documented
-  download states, and `download_finished` as the supported completion signal.
-  Also verified `POST /torrents/checkcached` (JSON body `{ hashes: [...] }`,
-  Bearer auth, `format` query param defaulting to `object`): `data` is a map
-  keyed by hash and a hash present in `data` means it is cached, while
-  uncached/unknown hashes are simply absent (the documented "Success Uncached"
-  example returns `data: null`). Hashes are matched case-insensitively.
-- Discord message-component interactions: `UPDATE_MESSAGE` (callback type 7)
-  edits the message the component was attached to (used to remove the search
-  select menu), and interaction followups (`POST /webhooks/{app}/{token}` with
-  the `EPHEMERAL` flag) deliver the final ephemeral result — from the official
-  Discord developer documentation.
-
-Not yet verified (needs a real TorBox API key):
-
-- Whether TorBox `mylist` `progress` is 0–1 or 0–100; the bot normalizes
-  both (`<= 1` is treated as a fraction).
-- Whether `download_state: "completed"` truly differs from
-  `download_finished: true` in practice; per the docs the bot relies only on
-  `download_finished`.
-
-## Agent skills
-
-Before modifying the TorBox integration (`src/services/torbox.ts`,
-`src/types/torbox.ts`, or any caller in `src/commands/` / `src/routes/api.ts`),
-read the tracked agent skill at [`.agents/skills/torbox-api/SKILL.md`](.agents/skills/torbox-api/SKILL.md).
-It documents the verified endpoint contracts, the `download_finished`
-readiness rule, `DUPLICATE_ITEM`/`ITEM_NOT_FOUND` handling, the cache-check
-batch request, and the download-link workflow, plus the security rules for
-credentials and download URLs. Update the skill in the same change when
-verified TorBox API behavior changes.
-
-Before modifying the Prowlarr integration (`src/services/prowlarr.ts`,
-`src/types/search.ts`, `src/commands/search.ts`, `src/utils/selectable.ts`,
-or the `/api/search` route in `src/routes/api.ts`), read the tracked agent
-skill at [`.agents/skills/prowlarr-api/SKILL.md`](.agents/skills/prowlarr-api/SKILL.md).
-It documents the verified search endpoint and `X-Api-Key` authentication,
-result normalization, info-hash format and dedup, the proxy-URL defense,
-deterministic ordering, the five-result cap, the search → selectable →
-TorBox-cache-enrichment workflow, and failure/fallback behavior. Update the
-skill in the same change when verified Prowlarr API behavior changes.
+Always update these skills in the same change when verified API behaviors change.
 
 ## Internal API usage (n8n or other automation)
 
@@ -456,7 +360,7 @@ All routes require `Authorization: Bearer $INTERNAL_API_TOKEN`.
 curl -X POST https://<worker>.workers.dev/api/search \
   -H "Authorization: Bearer $INTERNAL_API_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"query": "blade runner", "limit": 5}'
+  -d '{"query": "example query", "limit": 5}'
 
 # Add a magnet (201 on success, 409 on duplicate)
 curl -X POST https://<worker>.workers.dev/api/torrents \
@@ -492,22 +396,6 @@ responses never include download URLs, file lists, or server paths.
   `TORBOX_ALLOWED_GUILD_IDS` is missing, empty, or contains a malformed
   (non-snowflake) entry; the bot fails closed. Set a valid comma-separated
   value with `npx wrangler secret put TORBOX_ALLOWED_GUILD_IDS` and redeploy.
-
-## Remaining manual steps
-
-1. Create the Discord application/guild, Prowlarr instance, and TorBox
-   account (above).
-2. Add real IDs and API keys to `.dev.vars`.
-3. Add production secrets (`wrangler secret put …`, including
-   `TORBOX_ALLOWED_GUILD_IDS`) and review `wrangler.jsonc` vars
-   (`PROWLARR_URL` in particular).
-4. Run `npm run discord:register` (re-run it after pulling changes that
-   touch `scripts/register-commands.mjs`).
-5. Run `npm run deploy`.
-6. Enter the interactions endpoint URL in the Discord Developer Portal.
-7. First real search: run `/search ubuntu` in Discord and confirm the Worker
-   returns Prowlarr results (the Prowlarr UI's History → Search log shows
-   the incoming API search).
 
 ## Current limitations
 

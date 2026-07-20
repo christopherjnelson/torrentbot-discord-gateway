@@ -13,7 +13,7 @@ DISCORD_GUILD_ID=replace-me
 PROWLARR_API_KEY=replace-me
 # Optional local override for the Prowlarr base URL (defaults to the
 # PROWLARR_URL var in wrangler.jsonc)
-# PROWLARR_URL=https://prowlarr.chris.guru
+# PROWLARR_URL=https://prowlarr.example.com
 # TorBox API key (https://torbox.app/settings) - used for /add and /status
 TORBOX_API_KEY=replace-me
 # Bearer token required for the internal /api/* routes (generate a long random string)

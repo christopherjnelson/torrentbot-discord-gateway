@@ -9,8 +9,8 @@ import { fetchText } from "../utils/http";
 /**
  * Typed adapter for a user-controlled Prowlarr instance's search API.
  *
- * Verified against the official Prowlarr source (develop branch) and the
- * live instance at https://prowlarr.chris.guru (2026-07-19):
+ * Verified against the official Prowlarr source (develop branch) and a
+ * live Prowlarr instance (2026-07-19):
  * - `GET /api/v1/search` with query params `query`, `type` (default
  *   "search"), `indexerIds`, `categories`, `limit`, `offset`
  *   (src/Prowlarr.Api.V1/Search/SearchController.cs + SearchResource.cs).
