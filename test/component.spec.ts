@@ -14,9 +14,11 @@ import {
 	interceptFollowupEdit,
 	makeCommandInteraction,
 	makeComponentInteraction,
-	TEST_USER_ID,
-	TEST_INTERACTION_TOKEN,
 	TEST_APPLICATION_ID,
+	TEST_GUILD_ID,
+	TEST_INTERACTION_TOKEN,
+	TEST_UNAUTHORIZED_GUILD_ID,
+	TEST_USER_ID,
 } from "./helpers";
 
 beforeAll(() => {
@@ -150,7 +152,7 @@ describe("component interaction handling", () => {
 		expect(body.data.content).toContain("someone else");
 	});
 
-	it("rejects non-allowlisted user", async () => {
+	it("rejects interactions from an unauthorized guild", async () => {
 		const payload = createPayload(TEST_USER_ID, "");
 		const customId = await buildCustomId(payload, TEST_SIGNING_SECRET);
 		const { response } = await dispatchInteraction(
@@ -160,16 +162,53 @@ describe("component interaction handling", () => {
 						custom_id: customId,
 						values: ["a".repeat(40)],
 					} as any,
+					guild_id: TEST_UNAUTHORIZED_GUILD_ID,
 				}),
 			),
 			{
 				COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET,
-				TORBOX_ALLOWED_USER_IDS: "other-user",
+				TORBOX_ALLOWED_GUILD_IDS: TEST_GUILD_ID,
+			},
+		);
+		expect(response.status).toBe(200);
+		const body = await response.json() as {
+			type: number;
+			data: { flags?: number; content: string; components?: object[] };
+		};
+		expect(body.type).toBe(4);
+		expect(body.data.flags).toBe(64);
+		expect(body.data.content).toBe(
+			"TorrentBot is not enabled for this server.",
+		);
+		// The original menu is not removed on authorization failure.
+		expect(body.data.components).toBeUndefined();
+	});
+
+	it("rejects a valid signed component used in a DM", async () => {
+		const payload = createPayload(TEST_USER_ID, "");
+		const customId = await buildCustomId(payload, TEST_SIGNING_SECRET);
+		const { response } = await dispatchInteraction(
+			JSON.stringify(
+				makeComponentInteraction({
+					data: {
+						custom_id: customId,
+						values: ["a".repeat(40)],
+					} as any,
+					member: undefined,
+					user: { id: TEST_USER_ID },
+					guild_id: undefined,
+				}),
+			),
+			{
+				COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET,
+				TORBOX_ALLOWED_GUILD_IDS: TEST_GUILD_ID,
 			},
 		);
 		expect(response.status).toBe(200);
 		const body = await response.json() as { data: { content: string } };
-		expect(body.data.content).toContain("not authorized");
+		expect(body.data.content).toBe(
+			"TorrentBot can only be used in an authorized server.",
+		);
 	});
 
 	it("rejects invalid info hash in selection", async () => {
@@ -184,11 +223,11 @@ describe("component interaction handling", () => {
 					} as any,
 				}),
 			),
-			{
-				COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET,
-				TORBOX_ALLOWED_USER_IDS: TEST_USER_ID,
-			},
-		);
+		{
+			COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET,
+			TORBOX_ALLOWED_GUILD_IDS: TEST_GUILD_ID,
+		},
+	);
 		expect(response.status).toBe(200);
 		const body = await response.json() as { data: { content: string } };
 		// Invalid hash is rejected immediately (before background processing)
@@ -210,7 +249,7 @@ describe("component interaction handling", () => {
 			{
 				COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET,
 				TORBOX_API_KEY: "",
-				TORBOX_ALLOWED_USER_IDS: TEST_USER_ID,
+				TORBOX_ALLOWED_GUILD_IDS: TEST_GUILD_ID,
 			},
 		);
 		expect(response.status).toBe(200);

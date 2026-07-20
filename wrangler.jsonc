@@ -10,13 +10,15 @@
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
-	// Non-secret configuration. Comma-separated Discord user IDs allowed to run
-	// /add and /status. Empty means nobody is authorized. PROWLARR_URL is the
-	// base URL of the Prowlarr instance backing /search and /api/search.
-	// TORBOX_POLL_* bound the readiness check after adding a torrent
+	// Non-secret configuration. Comma-separated Discord guild (server) IDs
+	// whose members may run /search, /add, /status, and the search-result
+	// selection flow. Empty means nobody is authorized. Each entry must be
+	// a snowflake-style decimal string. PROWLARR_URL is the base URL of the
+	// Prowlarr instance backing /search and /api/search. TORBOX_POLL_*
+	// bound the readiness check after adding a torrent
 	// (maxAttempts x intervalMs ~= 15-20s total).
 	"vars": {
-		"TORBOX_ALLOWED_USER_IDS": "234752290047655936",
+		"TORBOX_ALLOWED_GUILD_IDS": "",
 		"UPSTREAM_TIMEOUT_MS": "10000",
 		"PROWLARR_URL": "https://prowlarr.chris.guru",
 		"TORBOX_POLL_INTERVAL_MS": "2500",

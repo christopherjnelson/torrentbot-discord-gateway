@@ -8,7 +8,10 @@ import {
 	makeInteraction,
 	TEST_APPLICATION_ID,
 	TEST_INTERACTION_TOKEN,
+	TEST_GUILD_ID,
+	TEST_UNAUTHORIZED_GUILD_ID,
 } from "./helpers";
+import { parseInteraction } from "../src/discord/types";
 
 beforeAll(() => {
 	fetchMock.activate();
@@ -80,6 +83,96 @@ describe("signed interaction handling", () => {
 		expect(body.type).toBe(4);
 		expect(body.data.flags).toBe(64);
 		expect(body.data.content).toContain("Unknown command");
+	});
+});
+
+describe("guild_id parsing", () => {
+	it("preserves a valid top-level guild_id", () => {
+		const interaction = parseInteraction({
+			id: "i1",
+			application_id: "a1",
+			type: 2,
+			token: "t1",
+			guild_id: TEST_GUILD_ID,
+			data: { name: "search" },
+		});
+		expect(interaction).not.toBeNull();
+		expect(interaction?.guild_id).toBe(TEST_GUILD_ID);
+	});
+
+	it("treats a missing guild_id as undefined (DM)", () => {
+		const interaction = parseInteraction({
+			id: "i1",
+			application_id: "a1",
+			type: 2,
+			token: "t1",
+			data: { name: "search" },
+		});
+		expect(interaction).not.toBeNull();
+		expect(interaction?.guild_id).toBeUndefined();
+	});
+
+	it("rejects a non-string guild_id", () => {
+		expect(
+			parseInteraction({
+				id: "i1",
+				application_id: "a1",
+				type: 2,
+				token: "t1",
+				guild_id: 12345,
+			}),
+		).toBeNull();
+		expect(
+			parseInteraction({
+				id: "i1",
+				application_id: "a1",
+				type: 2,
+				token: "t1",
+				guild_id: null,
+			}),
+		).toBeNull();
+	});
+
+	it("does not fabricate a guild_id from nested data", () => {
+		const interaction = parseInteraction({
+			id: "i1",
+			application_id: "a1",
+			type: 2,
+			token: "t1",
+			data: { name: "search", guild_id: TEST_GUILD_ID },
+		});
+		expect(interaction).not.toBeNull();
+		expect(interaction?.guild_id).toBeUndefined();
+	});
+
+	it("guild_id is preserved through routing to the search handler", async () => {
+		mockProwlarr(200, PROWLARR_EMPTY_JSON);
+		const { captured } = interceptOriginalResponseEdit();
+		const { ctx } = await dispatchInteraction(
+			JSON.stringify(
+				makeCommandInteraction("search", [
+					{ name: "query", type: 3, value: "blade runner" },
+				]),
+			),
+		);
+		await waitOnExecutionContext(ctx);
+		expect(captured[0].body.content).toContain(
+			"No results found for `blade runner`.",
+		);
+	});
+
+	it("rejects /search from an unauthorized guild without contacting Prowlarr", async () => {
+		const { response } = await dispatchInteraction(
+			JSON.stringify(
+				makeCommandInteraction("search", [
+					{ name: "query", type: 3, value: "blade runner" },
+				], { guild_id: TEST_UNAUTHORIZED_GUILD_ID }),
+			),
+		);
+		const body = (await response.json()) as { data: { content: string } };
+		expect(body.data.content).toBe(
+			"TorrentBot is not enabled for this server.",
+		);
 	});
 });
 

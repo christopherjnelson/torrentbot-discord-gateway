@@ -1,4 +1,9 @@
-import { getConfig, isAllowedTorboxUser, type AppConfig } from "../config";
+import {
+	authorizeGuild,
+	getConfig,
+	guildAuthMessage,
+	type AppConfig,
+} from "../config";
 import {
 	createFollowupMessage,
 	editFollowupMessage,
@@ -50,8 +55,8 @@ import {
  * Flow (all pre-ack checks are CPU-only, well within Discord's 3-second
  * initial-response window):
  * 1. Validate the signed component payload, requester binding, and the
- *    TorBox allowlist. Failures answer ephemerally and leave the search
- *    select menu untouched.
+ *    authorized-guild check. Failures answer ephemerally and leave the
+ *    search select menu untouched.
  * 2. ACK with UPDATE_MESSAGE (type 7) clearing the components, which removes
  *    the select menu from the search results message without a loading
  *    state.
@@ -112,12 +117,13 @@ export async function handleComponentInteraction(
 		);
 	}
 
-	// Check allowlist.
-	if (!isAllowedTorboxUser(config, invokerId)) {
-		return messageResponse(
-			"You are not authorized to add downloads on this bot.",
-			true,
-		);
+	// Check that the interaction comes from an authorized guild.
+	const authStatus = authorizeGuild(
+		interaction.guild_id,
+		config.torboxAllowedGuildIds,
+	);
+	if (authStatus !== "allowed") {
+		return messageResponse(guildAuthMessage(authStatus), true);
 	}
 
 	// Check TorBox is configured.

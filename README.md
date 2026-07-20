@@ -33,9 +33,9 @@ and no Voyager API key is required.
 
 | Command | Description | Who can use it |
 | --- | --- | --- |
-| `/search query:<text>` | Search Prowlarr, show the top 5 results (title, size, seeders, category/source, magnet/hash availability); results with valid info hashes include a select menu to add to TorBox | Everyone |
-| `/add magnet:<uri>` | Submit a magnet URI to TorBox | Users in `TORBOX_ALLOWED_USER_IDS` |
-| `/status` | List the TorBox account's downloads (ephemeral) | Users in `TORBOX_ALLOWED_USER_IDS` |
+| `/search query:<text>` | Search Prowlarr, show the top 5 results (title, size, seeders, category/source, magnet/hash availability); results with valid info hashes include a select menu to add to TorBox | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
+| `/add magnet:<uri>` | Submit a magnet URI to TorBox | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
+| `/status` | List the TorBox account's downloads (ephemeral) | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
 
 **HTTP routes**
 
@@ -57,11 +57,11 @@ When `/search` returns results with valid info hashes, it also includes a
 Discord select menu component. The original requester can use this menu to
 submit a selected result to TorBox without manually copying the magnet URI.
 
-When an allowlisted user selects a result, the bot:
+When an authorized member selects a result, the bot:
 
-1. **Validates** the signed component payload, requester binding, and the
-   `TORBOX_ALLOWED_USER_IDS` allowlist. Failures answer ephemerally and leave
-   the search menu untouched.
+1. **Validates** the signed component payload, the requester binding (only
+   the user who ran `/search` may use its menu), and the authorized-guild
+   check. Failures answer ephemerally and leave the search menu untouched.
 2. **Acknowledges** the interaction with `UPDATE_MESSAGE` (Discord callback
    type 7), which removes the select menu from the search results message
    without showing a loading state. The TorBox work runs in the background via
@@ -206,7 +206,7 @@ Fill in `.dev.vars` (never commit it — it is git-ignored):
 | `INTERNAL_API_TOKEN` | secret | Bearer token for `/api/*` (generate a long random string) |
 | `COMPONENT_SIGNING_SECRET` | secret | HMAC-SHA-256 signing for Discord component interactions (generate with `openssl rand -hex 32`) |
 | `PROWLARR_URL` | var | Prowlarr base URL (set in `wrangler.jsonc`; `.dev.vars` overrides locally) |
-| `TORBOX_ALLOWED_USER_IDS` | var | Comma-separated Discord user IDs allowed to run `/add` and `/status` |
+| `TORBOX_ALLOWED_GUILD_IDS` | var | Comma-separated Discord guild (server) IDs whose members may run `/search`, `/add`, `/status`, and the search-result selection flow (each entry must be a snowflake-style decimal string; empty means nobody is authorized) |
 | `UPSTREAM_TIMEOUT_MS` | var | Optional upstream timeout override (default `10000`) |
 | `TORBOX_POLL_INTERVAL_MS` | var | Optional delay between TorBox readiness polls after a selection (default `2500`, range 250–10000) |
 | `TORBOX_POLL_MAX_ATTEMPTS` | var | Optional cap on TorBox readiness polls after a selection (default `7`, range 1–20) |
@@ -231,9 +231,13 @@ openssl rand -hex 32
 ```
 
 Non-secret vars live in `wrangler.jsonc` (`PROWLARR_URL`,
-`TORBOX_ALLOWED_USER_IDS`, `UPSTREAM_TIMEOUT_MS`, `TORBOX_POLL_INTERVAL_MS`,
+`TORBOX_ALLOWED_GUILD_IDS`, `UPSTREAM_TIMEOUT_MS`, `TORBOX_POLL_INTERVAL_MS`,
 `TORBOX_POLL_MAX_ATTEMPTS`) and can be edited there or in the Cloudflare
-dashboard.
+dashboard. `TORBOX_ALLOWED_GUILD_IDS` is a comma-separated list of Discord
+guild (server) IDs; every member of an approved guild can use `/search`,
+`/add`, `/status`, and the search-result selection flow. Direct messages
+are not supported. Use placeholders only — never commit a real guild ID to
+tracked files.
 
 ### 6. Register the Discord commands
 
@@ -309,13 +313,18 @@ authentication.
   over `timestamp + body` from the application's public key.
 - **Internal API**: `Authorization: Bearer <INTERNAL_API_TOKEN>` with a
   constant-time comparison (SHA-256 pre-hashed before the compare loop).
-- **TorBox authorization**: `/add` and `/status` are restricted to Discord
-  user IDs in `TORBOX_ALLOWED_USER_IDS` and reply ephemerally.
+- **TorBox authorization**: `/search`, `/add`, and `/status` are restricted
+  to members of Discord guilds listed in `TORBOX_ALLOWED_GUILD_IDS` and
+  reply ephemerally. Direct messages are rejected. Every member of an
+  approved guild may run these commands.
 - **Component interaction authorization**: select menu interactions from
   `/search` results are restricted to the original requester (verified via
-  HMAC-SHA-256 signed payloads) and require the user to be in
-  `TORBOX_ALLOWED_USER_IDS`. The signing secret is
-  `COMPONENT_SIGNING_SECRET`. Payloads expire after 15 minutes.
+  HMAC-SHA-256 signed payloads) and must originate from an authorized
+  guild. A valid signed component used in a DM or another server is
+  rejected. The signing secret is `COMPONENT_SIGNING_SECRET`. Payloads
+  expire after 15 minutes. The original requester binding is preserved:
+  even within an authorized guild, only the user who created a particular
+  search menu may select from it.
 - **No secret logging**: interaction tokens, bot tokens, API keys,
   authorization headers, full magnet URIs, generated download URLs, and raw
   interaction payloads are never logged. Upstream error types never carry
@@ -420,8 +429,14 @@ responses never include download URLs, file lists, or server paths.
 - **"The upstream service rejected the configured credentials"**: the
   `PROWLARR_API_KEY` is wrong or was rotated; copy the current key from
   Prowlarr → Settings → General → Security → API Key.
-- **`/add` says "not authorized"**: add your Discord user ID to
-  `TORBOX_ALLOWED_USER_IDS` (var, comma-separated).
+- **`/add` says "TorrentBot is not enabled for this server"**: the
+  interaction's guild is not listed in `TORBOX_ALLOWED_GUILD_IDS` (var,
+  comma-separated snowflake IDs). Add the guild ID and redeploy. Direct
+  messages are not supported.
+- **"TorrentBot authorization is not configured correctly"**:
+  `TORBOX_ALLOWED_GUILD_IDS` is missing, empty, or contains a malformed
+  (non-snowflake) entry; the bot fails closed. Fix the value in
+  `wrangler.jsonc` (or the Cloudflare dashboard) and redeploy.
 
 ## Remaining manual steps
 

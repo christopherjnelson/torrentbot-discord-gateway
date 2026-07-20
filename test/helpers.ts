@@ -18,7 +18,8 @@ export const TEST_PUBLIC_KEY_HEX = keyPair.publicKey
 export const TEST_APPLICATION_ID = "app-123";
 export const TEST_INTERACTION_TOKEN = "test-interaction-token";
 export const TEST_USER_ID = "user-1";
-export const TEST_GUILD_ID = "guild-1";
+export const TEST_GUILD_ID = "123456789012345678";
+export const TEST_UNAUTHORIZED_GUILD_ID = "987654321098765432";
 
 /** Deterministic Worker env for tests; never depends on real .dev.vars. */
 export function testEnv(overrides: Record<string, string> = {}): Env {
@@ -29,7 +30,7 @@ export function testEnv(overrides: Record<string, string> = {}): Env {
 		PROWLARR_API_KEY: "test-prowlarr-key",
 		TORBOX_API_KEY: "test-torbox-key",
 		INTERNAL_API_TOKEN: "test-internal-token",
-		TORBOX_ALLOWED_USER_IDS: TEST_USER_ID,
+		TORBOX_ALLOWED_GUILD_IDS: TEST_GUILD_ID,
 		UPSTREAM_TIMEOUT_MS: "10000",
 		...overrides,
 	} as unknown as Env;

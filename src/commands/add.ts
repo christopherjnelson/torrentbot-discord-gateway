@@ -1,10 +1,9 @@
-import { isAllowedTorboxUser, type AppConfig } from "../config";
+import { authorizeGuild, guildAuthMessage, type AppConfig } from "../config";
 import {
 	deferredMessageResponse,
 	messageResponse,
 } from "../discord/responses";
 import {
-	getInvokerId,
 	getStringOption,
 	type DiscordInteraction,
 } from "../discord/types";
@@ -47,9 +46,9 @@ async function completeAdd(
 }
 
 /**
- * Handle `/add magnet:<uri>`. Restricted to allowlisted Discord users
- * (TORBOX_ALLOWED_USER_IDS) because it submits downloads to the owner's
- * TorBox account. Responds ephemerally.
+ * Handle `/add magnet:<uri>`. Restricted to members of an authorized
+ * Discord guild (TORBOX_ALLOWED_GUILD_IDS) because it submits downloads to
+ * the owner's TorBox account. Responds ephemerally.
  */
 export function handleAddCommand(
 	interaction: DiscordInteraction,
@@ -64,11 +63,12 @@ export function handleAddCommand(
 		);
 	}
 
-	if (!isAllowedTorboxUser(config, getInvokerId(interaction))) {
-		return messageResponse(
-			"You are not authorized to add downloads on this bot.",
-			true,
-		);
+	const authStatus = authorizeGuild(
+		interaction.guild_id,
+		config.torboxAllowedGuildIds,
+	);
+	if (authStatus !== "allowed") {
+		return messageResponse(guildAuthMessage(authStatus), true);
 	}
 
 	if (!config.torboxApiKey) {

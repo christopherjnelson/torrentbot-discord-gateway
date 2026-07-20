@@ -6,6 +6,8 @@ import {
 	makeCommandInteraction,
 	makeInteraction,
 	TEST_INTERACTION_TOKEN,
+	TEST_GUILD_ID,
+	TEST_UNAUTHORIZED_GUILD_ID,
 	TEST_USER_ID,
 } from "./helpers";
 
@@ -77,18 +79,25 @@ describe("/add command", () => {
 		expect(body.data.content).toContain("Invalid magnet URI");
 	});
 
-	it("rejects users who are not on the allowlist", async () => {
+	it("rejects interactions from an unauthorized guild ephemerally without upstream calls", async () => {
 		const { response } = await dispatchInteraction(
 			JSON.stringify(
 				makeCommandInteraction(
 					"add",
 					[{ name: "magnet", type: 3, value: VALID_MAGNET }],
-					{ member: { user: { id: "intruder-9" } } },
+					{ guild_id: TEST_UNAUTHORIZED_GUILD_ID },
 				),
 			),
 		);
-		const body = (await response.json()) as { data: { content: string } };
-		expect(body.data.content).toContain("not authorized");
+		const body = (await response.json()) as {
+			type: number;
+			data: { flags?: number; content: string };
+		};
+		expect(body.type).toBe(4);
+		expect(body.data.flags).toBe(64);
+		expect(body.data.content).toBe(
+			"TorrentBot is not enabled for this server.",
+		);
 	});
 
 	it("defers ephemerally and reports the created torrent", async () => {
@@ -163,16 +172,23 @@ describe("/add command", () => {
 });
 
 describe("/status command", () => {
-	it("rejects users who are not on the allowlist", async () => {
+	it("rejects interactions from an unauthorized guild", async () => {
 		const { response } = await dispatchInteraction(
 			JSON.stringify(
 				makeCommandInteraction("status", [], {
-					member: { user: { id: "intruder-9" } },
+					guild_id: TEST_UNAUTHORIZED_GUILD_ID,
 				}),
 			),
 		);
-		const body = (await response.json()) as { data: { content: string } };
-		expect(body.data.content).toContain("not authorized");
+		const body = (await response.json()) as {
+			type: number;
+			data: { flags?: number; content: string };
+		};
+		expect(body.type).toBe(4);
+		expect(body.data.flags).toBe(64);
+		expect(body.data.content).toBe(
+			"TorrentBot is not enabled for this server.",
+		);
 	});
 
 	it("lists downloads without leaking private data", async () => {
@@ -242,7 +258,7 @@ describe("/status command", () => {
 });
 
 describe("authorization edge cases", () => {
-	it("rejects /status when invoked from a DM by a non-allowlisted user", async () => {
+	it("rejects /status when invoked from a DM", async () => {
 		const { response } = await dispatchInteraction(
 			JSON.stringify(
 				makeInteraction({
@@ -253,7 +269,128 @@ describe("authorization edge cases", () => {
 				}),
 			),
 		);
+		const body = (await response.json()) as {
+			type: number;
+			data: { flags?: number; content: string };
+		};
+		expect(body.type).toBe(4);
+		expect(body.data.flags).toBe(64);
+		expect(body.data.content).toBe(
+			"TorrentBot can only be used in an authorized server.",
+		);
+	});
+
+	it("rejects /add when invoked from a DM", async () => {
+		const { response } = await dispatchInteraction(
+			JSON.stringify(
+				makeCommandInteraction(
+					"add",
+					[{ name: "magnet", type: 3, value: VALID_MAGNET }],
+					{ member: undefined, user: { id: "someone-else" }, guild_id: undefined },
+				),
+			),
+		);
 		const body = (await response.json()) as { data: { content: string } };
-		expect(body.data.content).toContain("not authorized");
+		expect(body.data.content).toBe(
+			"TorrentBot can only be used in an authorized server.",
+		);
+	});
+
+	it("rejects /search when invoked from a DM", async () => {
+		const { response } = await dispatchInteraction(
+			JSON.stringify(
+				makeCommandInteraction(
+					"search",
+					[{ name: "query", type: 3, value: "blade runner" }],
+					{ member: undefined, user: { id: "someone-else" }, guild_id: undefined },
+				),
+			),
+		);
+		const body = (await response.json()) as { data: { content: string } };
+		expect(body.data.content).toBe(
+			"TorrentBot can only be used in an authorized server.",
+		);
+	});
+
+	it("rejects all commands when the guild allowlist is empty", async () => {
+		const { response } = await dispatchInteraction(
+			JSON.stringify(makeCommandInteraction("status")),
+			{ TORBOX_ALLOWED_GUILD_IDS: "" },
+		);
+		const body = (await response.json()) as { data: { content: string } };
+		expect(body.data.content).toBe(
+			"TorrentBot authorization is not configured correctly.",
+		);
+	});
+
+	it("rejects all commands when the guild allowlist is missing", async () => {
+		const { response } = await dispatchInteraction(
+			JSON.stringify(makeCommandInteraction("status")),
+			{ TORBOX_ALLOWED_GUILD_IDS: "" },
+		);
+		const body = (await response.json()) as { data: { content: string } };
+		expect(body.data.content).toBe(
+			"TorrentBot authorization is not configured correctly.",
+		);
+	});
+
+	it("fails closed when the guild allowlist is malformed", async () => {
+		const { response } = await dispatchInteraction(
+			JSON.stringify(makeCommandInteraction("status")),
+			{ TORBOX_ALLOWED_GUILD_IDS: "not-a-snowflake" },
+		);
+		const body = (await response.json()) as { data: { content: string } };
+		expect(body.data.content).toBe(
+			"TorrentBot authorization is not configured correctly.",
+		);
+	});
+
+	it("fails closed when any guild ID in the allowlist is malformed", async () => {
+		const { response } = await dispatchInteraction(
+			JSON.stringify(makeCommandInteraction("status")),
+			{ TORBOX_ALLOWED_GUILD_IDS: `${TEST_GUILD_ID},bad-id` },
+		);
+		const body = (await response.json()) as { data: { content: string } };
+		expect(body.data.content).toBe(
+			"TorrentBot authorization is not configured correctly.",
+		);
+	});
+
+	it("no longer grants access via the previous user-ID variable", async () => {
+		const { response } = await dispatchInteraction(
+			JSON.stringify(makeCommandInteraction("status")),
+			{
+				TORBOX_ALLOWED_GUILD_IDS: "",
+				TORBOX_ALLOWED_USER_IDS: TEST_USER_ID,
+			},
+		);
+		const body = (await response.json()) as { data: { content: string } };
+		expect(body.data.content).toBe(
+			"TorrentBot authorization is not configured correctly.",
+		);
+	});
+
+	it("accepts an authorized guild with multiple comma-separated IDs", async () => {
+		fetchMock
+			.get("https://api.torbox.app")
+			.intercept({ path: /^\/v1\/api\/torrents\/mylist/ })
+			.reply(
+				200,
+				JSON.stringify({
+					success: true,
+					error: null,
+					detail: "ok",
+					data: [],
+				}),
+			);
+		const { captured } = interceptOriginalResponseEdit();
+		const { ctx } = await dispatchInteraction(
+			JSON.stringify(makeCommandInteraction("status")),
+			{
+				TORBOX_ALLOWED_GUILD_IDS: `${TEST_UNAUTHORIZED_GUILD_ID}, ${TEST_GUILD_ID} `,
+			},
+		);
+		await waitOnExecutionContext(ctx);
+		expect(captured[0].body.content).toContain("No downloads");
 	});
 });

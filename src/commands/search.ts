@@ -1,4 +1,4 @@
-import type { AppConfig } from "../config";
+import { authorizeGuild, guildAuthMessage, type AppConfig } from "../config";
 import { editOriginalResponse } from "../discord/client";
 import {
 	deferredMessageResponse,
@@ -140,6 +140,14 @@ export function handleSearchCommand(
 			"Missing or invalid `query` option. Usage: `/search query:<text>` (1-200 characters).",
 			true,
 		);
+	}
+
+	const authStatus = authorizeGuild(
+		interaction.guild_id,
+		config.torboxAllowedGuildIds,
+	);
+	if (authStatus !== "allowed") {
+		return messageResponse(guildAuthMessage(authStatus), true);
 	}
 
 	if (!config.prowlarrUrl || !config.prowlarrApiKey) {

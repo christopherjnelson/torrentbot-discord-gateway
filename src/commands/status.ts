@@ -1,9 +1,9 @@
-import { isAllowedTorboxUser, type AppConfig } from "../config";
+import { authorizeGuild, guildAuthMessage, type AppConfig } from "../config";
 import {
 	deferredMessageResponse,
 	messageResponse,
 } from "../discord/responses";
-import { getInvokerId, type DiscordInteraction } from "../discord/types";
+import { type DiscordInteraction } from "../discord/types";
 import { listTorrents } from "../services/torbox";
 import type { TorboxTorrent } from "../types/torbox";
 import {
@@ -85,20 +85,21 @@ async function completeStatus(
 }
 
 /**
- * Handle `/status`. Restricted to allowlisted Discord users because the bot
- * is backed by a single TorBox account; the list is that account's data and
- * is only shown ephemerally to authorized users.
+ * Handle `/status`. Restricted to members of an authorized Discord guild
+ * because the bot is backed by a single TorBox account; the list is that
+ * account's data and is only shown ephemerally to authorized users.
  */
 export function handleStatusCommand(
 	interaction: DiscordInteraction,
 	config: AppConfig,
 	ctx: ExecutionContext,
 ): Response {
-	if (!isAllowedTorboxUser(config, getInvokerId(interaction))) {
-		return messageResponse(
-			"You are not authorized to view downloads on this bot.",
-			true,
-		);
+	const authStatus = authorizeGuild(
+		interaction.guild_id,
+		config.torboxAllowedGuildIds,
+	);
+	if (authStatus !== "allowed") {
+		return messageResponse(guildAuthMessage(authStatus), true);
 	}
 
 	if (!config.torboxApiKey) {
