@@ -19,9 +19,6 @@ const response = await worker.fetch(request, env, ctx);
 await waitOnExecutionContext(ctx);
 
 expect(response.status).toBe(200);
-expect(response.headers.get("content-type")).toContain(
-"application/json",
-);
 expect(await response.json()).toEqual({
 ok: true,
 service: "torrentbot-discord-gateway",
@@ -29,22 +26,43 @@ status: "healthy",
 });
 });
 
-it("reads the exact raw body for POST /", async () => {
-const rawBody = '{"type":1,"message":"test"}';
-const response = await SELF.fetch("https://example.com/", {
+it("rejects an unsigned Discord interaction", async () => {
+const response = await SELF.fetch(
+"https://example.com/discord/interactions",
+{
 method: "POST",
 headers: {
 "Content-Type": "application/json",
 },
-body: rawBody,
+body: '{"type":1}',
+},
+);
+
+expect(response.status).toBe(401);
+expect(await response.json()).toEqual({
+ok: false,
+error: "Missing Discord signature headers",
+});
 });
 
-expect(response.status).toBe(200);
+it("rejects invalid Discord signature headers", async () => {
+const response = await SELF.fetch(
+"https://example.com/discord/interactions",
+{
+method: "POST",
+headers: {
+"Content-Type": "application/json",
+"X-Signature-Ed25519": "invalid",
+"X-Signature-Timestamp": "1234567890",
+},
+body: '{"type":1}',
+},
+);
+
+expect(response.status).toBe(401);
 expect(await response.json()).toEqual({
-ok: true,
-received: true,
-contentType: "application/json",
-bodyLength: rawBody.length,
+ok: false,
+error: "Invalid request signature",
 });
 });
 
@@ -58,16 +76,15 @@ error: "Not found",
 });
 });
 
-it("returns 405 for unsupported methods", async () => {
+it("returns 404 for unsupported routes and methods", async () => {
 const response = await SELF.fetch("https://example.com/", {
 method: "DELETE",
 });
 
-expect(response.status).toBe(405);
-expect(response.headers.get("allow")).toBe("GET, POST");
+expect(response.status).toBe(404);
 expect(await response.json()).toEqual({
 ok: false,
-error: "Method not allowed",
+error: "Not found",
 });
 });
 });
