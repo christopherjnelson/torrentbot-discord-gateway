@@ -79,12 +79,34 @@ title/name and year. Selecting a media item re-fetches the corresponding
 `GET /3/movie/{id}` or `GET /3/tv/{id}` details record so client-provided
 title/year data is never trusted.
 
-Movie selection is unchanged: Prowlarr receives
-`<canonical title> <year>` when a valid year exists, otherwise just the
-canonical title. TV details also contain TMDB's season summaries. After a
-series is chosen, TorrentBot presents **Complete series**, **Specials** when
-season 0 exists, every returned numbered season, and
-**Search exactly as entered**. The resulting Prowlarr queries are predictable:
+The media workflow is one evolving ephemeral Discord message. Traditional
+embeds show trusted TMDB metadata and a poster thumbnail when TMDB returns a
+valid poster path. Dropdowns are reserved for TMDB matches, seasons, and
+Prowlarr releases; obvious actions and navigation use signed buttons.
+
+Movie:
+
+```text
+search → choose movie → view media card → search releases
+       → choose release → processing → download
+```
+
+The movie card includes title, year, runtime, bounded genres, a concise
+overview, and optional poster. **Search Releases** sends
+`<canonical title> <year>` when a valid year exists, otherwise the canonical
+title. **Search Exactly as Entered**, **Back**, and **Cancel** are buttons.
+
+TV:
+
+```text
+search → choose series → view series card → choose complete/specials/season
+       → choose release → processing → download
+```
+
+TV details include trusted TMDB season summaries. The card presents
+**Complete Series**, **Specials** when season 0 exists, every returned season,
+**Search Exactly as Entered**, **Back**, and **Cancel**. The resulting
+Prowlarr queries remain predictable:
 
 ```text
 Breaking Bad complete
@@ -94,17 +116,17 @@ Doctor Who S00
 
 Specials maps to `S00`; positive season numbers use at least two digits and
 are not truncated above 99. No year, TMDB ID, episode count, or media label is
-appended. Long-running series use signed pages of 20 seasons, so no returned
-season is silently omitted. Episode selection is not currently supported.
+appended. Long-running series use a season dropdown plus signed
+**Previous**/**Next** buttons on pages of 20, so no returned season is silently
+omitted. Episode selection is not currently supported.
 
-Every media and TV season menu retains **Search exactly as entered**. That
-selection bypasses season canonicalization and makes no additional TMDB
-details request; it sends the original validated query directly to Prowlarr.
-The exact query remains in the bot-authored heading with reversible escaping
-and is accepted only when it matches the signed query digest. Numeric TMDB IDs,
-season numbers, and page navigation use compact integrity-checked values. The
-custom IDs contain no title, query, or season list and remain signed,
-requester-bound, expiring, and within Discord's 100-character limit.
+Every media and TV screen retains **Search Exactly as Entered**. It bypasses
+canonicalization and sends the original validated query directly to Prowlarr.
+The exact query is recovered from a bot-authored embed footer with reversible
+escaping and accepted only when it matches the signed query digest. Compact
+custom IDs contain workflow action, requester, expiry, media type, TMDB ID,
+season/page state, and query digest—never titles, overviews, or full queries.
+Release option values also carry an HMAC so a hidden hash cannot be replaced.
 
 General and movie searches do not use the season-selection step.
 
@@ -123,25 +145,30 @@ check is **advisory only**: it does not add anything to the TorBox account,
 and if TorBox is not configured or the cache check fails for any reason,
 `/search` still returns the normal Prowlarr results without badges.
 
-When an authorized member selects a result, the bot:
+When an authorized member selects a release, the bot:
 
 1. **Validates** the signed component payload, the requester binding (only
    the user who ran `/search` may use its menu), and the authorized-guild
    check. Failures answer ephemerally and leave the search menu untouched.
-2. **Acknowledges** the interaction with `UPDATE_MESSAGE` (Discord callback
-   type 7), which removes the select menu from the search results message
-   without showing a loading state. The TorBox work runs in the background via
-   `ctx.waitUntil`.
+2. **Replaces** the same ephemeral response with a processing card and removes
+   stale controls. Async media/season transitions use Discord callback type 6,
+   preserving the current card until its replacement is ready.
 3. **Submits** the magnet to TorBox. If TorBox reports the item already
    exists (`DUPLICATE_ITEM`), the bot locates the existing torrent by its
    info hash (the stable documented identifier, never by title) and
    continues.
 4. **Polls** TorBox for readiness in a short bounded window (see
    *TorBox polling* below).
-5. **Reports** the outcome in an ephemeral followup message.
+5. **Edits** that same ephemeral response with a processing or ready card.
+   Ready cards use a Discord HTTPS link button plus **New Search**.
 
-Component interactions are signed with HMAC-SHA-256 to prevent tampering and
-bind the selection to the original requester.
+Back navigation re-runs a trusted TMDB search or details lookup using signed
+IDs. Cancel replaces the message with `Search cancelled.` and removes every
+control. All component interactions are HMAC-signed, requester-bound,
+guild-authorized, stateless, and expire after 15 minutes.
+
+`/search general` never calls TMDB. It moves directly from a concise search
+state to the release card, then uses the same processing/download presentation.
 
 ## Detailed Workflows
 
@@ -156,7 +183,7 @@ Added to TorBox.
 
 **Example Release (2026) [1080p]**
 Ready to download:
-[Download file](https://…) — `Example.Release.2026.1080p.mkv` (1.4 GiB)
+Download button
 ```
 
 For a multi-file torrent the bot returns a whole-torrent zip archive link
@@ -168,7 +195,7 @@ Added to TorBox.
 
 **Some.Season.Pack.2026**
 Ready to download (12 files):
-[Download archive (zip)](https://…)
+Download button (ZIP)
 ```
 
 **Still processing** (torrent added but not ready within the bounded window)
@@ -187,10 +214,10 @@ The torrent was added, but TorrentBot could not generate a download link yet.
 Use `/status` to check it later.
 ```
 
-All of these responses are **ephemeral** — the download link is never placed in
-the public search results message and is only ever shown to the requester. The
-generated TorBox download URL is a temporary CDN link (valid ~3 hours for
-starting a download) and is never logged.
+All of these responses are **ephemeral**. A single-file torrent uses its direct
+temporary URL; zero or multiple files use TorBox's ZIP URL. The HTTPS URL is
+placed only on the final Discord link button, is never persisted or logged,
+and is temporary (about three hours for starting a download).
 
 ### TorBox polling
 

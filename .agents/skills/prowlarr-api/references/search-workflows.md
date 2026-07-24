@@ -133,3 +133,8 @@ $INTERNAL_API_TOKEN`, accepts `{ query, limit? }` (query 1–200 chars, limit
 **includes** `magnetUri` in the response (authenticated server-to-server
 traffic), unlike Discord. No TorBox cache enrichment is performed on this
 route. No select menu is built.
+The Discord presentation is an embed-backed release card with up to ten
+options. The dropdown remains the only release-choice control; Back and Cancel
+are buttons. Each hidden option value is the normalized info hash plus a
+context-bound HMAC. Cache enrichment remains one batch over the exact
+selectable set and the Prowlarr endpoint/normalization contract is unchanged.

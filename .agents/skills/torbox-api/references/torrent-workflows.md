@@ -118,7 +118,7 @@ Tests assert the `bypass_cache=true` query parameter is sent.
 `POST /torrents/checkcached?format=object` with JSON body
 `{ hashes: [...] }`. Hashes are lowercased, validated as 40-char hex, and
 de-duplicated **before** sending; empty input makes no request and returns an
-empty set. One batch request covers up to the five selectable search results.
+empty set. One batch request covers up to the ten selectable search results.
 Throws `Upstream*` on HTTP/auth/parse failure; the `/search` caller treats it
 as advisory (logs a sanitized warning, leaves results without badges).
 
@@ -181,3 +181,11 @@ ready within the window, the bot tells the user it is still processing and
 **stops** — it does **not** persist state and does **not** notify the user
 later. `/status` is the fallback. Persistent background monitoring (KV, D1,
 Durable Objects, Queues, Workflows, cron) is intentionally out of scope.
+## Guided Discord presentation `[impl+tests]`
+
+The redesigned search continuation edits one ephemeral interaction response:
+release card → processing card → ready/status card. It does not create a
+separate followup for the guided path. Ready cards use an HTTPS Discord link
+button: exactly one file uses the direct file URL; zero or multiple files use
+the ZIP URL. The temporary URL remains unlogged and unpersisted. `/add` and
+`/status` contracts are unchanged.

@@ -30,6 +30,10 @@ Enforced at the TorBox client boundary and by the command-layer helpers
 - Generated temporary download URLs — returned to the requester in an
   ephemeral message only; never logged, never persisted, never placed in the
   public search-results message. `[impl+tests]`
+
+The guided search flow places that validated HTTPS URL only in the final
+ephemeral Discord link button; stale release controls are removed before
+TorBox processing begins. `[impl+tests]`
 - Raw upstream request URLs and response bodies — only the sanitized
   `detail` (≤200 chars) and the `error` code are surfaced. `[impl+tests]`
 

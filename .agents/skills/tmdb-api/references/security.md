@@ -22,3 +22,7 @@
   no title, query, or season list. `[impl+tests]`
 - The exact-search fallback does not make an additional TMDB details request.
   `[impl+tests]`
+Media artwork is accepted only as a normalized TMDB poster file path and is
+rendered from the fixed HTTPS `image.tmdb.org` origin. Full provider-supplied
+URLs, traversal, query strings, nested paths, and malformed values are rejected.
+Poster URLs are never downloaded, proxied, cached, persisted, or logged.
