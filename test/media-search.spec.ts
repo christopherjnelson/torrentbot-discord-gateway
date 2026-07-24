@@ -159,8 +159,7 @@ describe("TMDB movie disambiguation", () => {
 			{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
 		);
 		expect((await response.json()) as object).toMatchObject({
-			type: 7,
-			data: { components: [] },
+			type: 6,
 		});
 		await waitOnExecutionContext(ctx);
 		expect(detailsAuth).toBe("Bearer test-tmdb-read-token");
@@ -229,8 +228,7 @@ describe("TMDB TV disambiguation", () => {
 			{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
 		);
 		expect(await response.json()).toMatchObject({
-			type: 7,
-			data: { components: [], allowed_mentions: { parse: [] } },
+			type: 6,
 		});
 		await waitOnExecutionContext(ctx);
 		expect(captured[0].body.content).toContain(

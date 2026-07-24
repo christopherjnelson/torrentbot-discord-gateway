@@ -16,6 +16,7 @@
 export const CALLBACK_PONG = 1;
 export const CALLBACK_CHANNEL_MESSAGE = 4;
 export const CALLBACK_DEFERRED_MESSAGE = 5;
+export const CALLBACK_DEFERRED_UPDATE_MESSAGE = 6;
 export const CALLBACK_UPDATE_MESSAGE = 7;
 
 /** Message flag EPHEMERAL (1 << 6): only the invoker sees the message. */
@@ -69,6 +70,16 @@ export function updateMessageResponse(data: { components?: object[] }): Response
 		type: CALLBACK_UPDATE_MESSAGE,
 		data: { ...data, allowed_mentions: NO_MENTIONS },
 	});
+}
+
+/**
+ * ACK a component interaction whose existing message will be edited after
+ * asynchronous work. Discord keeps the current message intact until the
+ * webhook edit arrives, so a failed continuation cannot strand the user on
+ * a control-free intermediate state.
+ */
+export function deferredUpdateMessageResponse(): Response {
+	return json({ type: CALLBACK_DEFERRED_UPDATE_MESSAGE });
 }
 
 /** Standard JSON error envelope used by all non-Discord-callback routes. */

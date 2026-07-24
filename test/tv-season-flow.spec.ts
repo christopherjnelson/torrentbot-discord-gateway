@@ -133,8 +133,7 @@ async function openSeasonMenu(
 		{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
 	);
 	expect(await response.json()).toMatchObject({
-		type: 7,
-		data: { components: [], allowed_mentions: { parse: [] } },
+		type: 6,
 	});
 	await waitOnExecutionContext(ctx);
 	expect(captured).toHaveLength(1);
@@ -178,8 +177,7 @@ async function chooseCanonicalOption(
 		{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
 	);
 	expect(await response.json()).toMatchObject({
-		type: 7,
-		data: { components: [], allowed_mentions: { parse: [] } },
+		type: 6,
 	});
 	await waitOnExecutionContext(ctx);
 	expect(searched()).toBe(expectedQuery);

@@ -10,6 +10,7 @@ import {
 	editOriginalResponse,
 } from "../discord/client";
 import {
+	deferredUpdateMessageResponse,
 	messageResponse,
 	updateMessageResponse,
 } from "../discord/responses";
@@ -166,7 +167,7 @@ export async function handleComponentInteraction(
 				config,
 			),
 		);
-		return updateMessageResponse({ components: [] });
+		return deferredUpdateMessageResponse();
 	}
 
 	if (payload.action === "season") {
@@ -189,7 +190,7 @@ export async function handleComponentInteraction(
 		}
 		if (selection.kind === "exact") {
 			ctx.waitUntil(completeSearch(interaction, selection.query, config));
-			return updateMessageResponse({ components: [] });
+			return deferredUpdateMessageResponse();
 		}
 		if (!config.tmdbReadAccessToken) {
 			return messageResponse(
@@ -205,7 +206,7 @@ export async function handleComponentInteraction(
 				config,
 			),
 		);
-		return updateMessageResponse({ components: [] });
+		return deferredUpdateMessageResponse();
 	}
 
 	// Release menus carry a BTIH hash as the selected option value.
