@@ -7,9 +7,13 @@ Tag legend: `[impl+tests]` = verified by implementation + passing tests;
 
 - `/search general query:<text>` sends the validated query directly to
   Prowlarr and never calls TMDB.
-- A selected `/search movie` or `/search tv` result re-fetches trusted
-  canonical metadata, then enters this workflow with
-  `<canonical title> <year>` (or title only when year is unavailable).
+- A selected `/search movie` result re-fetches trusted canonical metadata,
+  then enters this workflow with `<canonical title> <year>` (or title only
+  when year is unavailable).
+- A selected `/search tv` series first enters a signed season menu. Complete
+  enters this workflow with `<canonical title> complete`; Specials/numbered
+  seasons use `<canonical title> S00|Sxx`. Trusted TV details are re-fetched
+  before constructing either canonical query.
 - `Search exactly as entered` bypasses TMDB details and enters this workflow
   with the original validated query.
 

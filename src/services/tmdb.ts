@@ -1,4 +1,9 @@
-import type { MediaSearchResult, MediaType } from "../types/media";
+import type {
+	MediaSearchResult,
+	MediaType,
+	TvDetails,
+	TvSeasonSummary,
+} from "../types/media";
 import {
 	ConfigError,
 	UpstreamParseError,
@@ -17,8 +22,9 @@ import { fetchText } from "../utils/http";
  * - GET /3/tv/{series_id}
  * - application authentication via Authorization: Bearer <read token>
  *
- * Only the fields represented by MediaSearchResult are read. Raw payloads,
- * URLs, and authorization headers are never logged or placed in errors.
+ * Only the fields represented by MediaSearchResult and TvSeasonSummary are
+ * read. Raw payloads, URLs, and authorization headers are never logged or
+ * placed in errors.
  */
 
 const TMDB_SERVICE = "tmdb" as const;
@@ -83,6 +89,14 @@ function normalizePopularity(value: unknown): number | null {
 		: null;
 }
 
+function normalizeNonNegativeInt(value: unknown): number | null {
+	return typeof value === "number" &&
+		Number.isSafeInteger(value) &&
+		value >= 0
+		? value
+		: null;
+}
+
 function normalizeYear(value: unknown): number | null {
 	if (typeof value !== "string") {
 		return null;
@@ -135,6 +149,34 @@ function normalizeMedia(
 		),
 		popularity: normalizePopularity(value.popularity),
 	};
+}
+
+/**
+ * Normalize the season summaries embedded in a TV-details response.
+ * Malformed rows are skipped, the first valid occurrence of a season number
+ * wins, and the result is sorted numerically so Specials (season 0) is first.
+ */
+export function normalizeTvSeasons(value: unknown): TvSeasonSummary[] {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+	const seen = new Set<number>();
+	const seasons: TvSeasonSummary[] = [];
+	for (const entry of value) {
+		if (!isRecord(entry)) {
+			continue;
+		}
+		const seasonNumber = normalizeNonNegativeInt(entry.season_number);
+		if (seasonNumber === null || seen.has(seasonNumber)) {
+			continue;
+		}
+		seen.add(seasonNumber);
+		seasons.push({
+			seasonNumber,
+			episodeCount: normalizeNonNegativeInt(entry.episode_count),
+		});
+	}
+	return seasons.sort((left, right) => left.seasonNumber - right.seasonNumber);
 }
 
 function buildUrl(path: string): URL {
@@ -205,12 +247,22 @@ export async function searchTmdb(
 	return results;
 }
 
-/** Fetch trusted canonical title/year for a selected numeric TMDB ID. */
+/** Fetch trusted canonical metadata for a selected numeric TMDB ID. */
+export function getTmdbDetails(
+	mediaType: "movie",
+	id: number,
+	options: TmdbOptions,
+): Promise<MediaSearchResult>;
+export function getTmdbDetails(
+	mediaType: "tv",
+	id: number,
+	options: TmdbOptions,
+): Promise<TvDetails>;
 export async function getTmdbDetails(
 	mediaType: MediaType,
 	id: number,
 	options: TmdbOptions,
-): Promise<MediaSearchResult> {
+): Promise<MediaSearchResult | TvDetails> {
 	if (!Number.isSafeInteger(id) || id <= 0) {
 		throw new UserInputError("Invalid TMDB media ID");
 	}
@@ -223,5 +275,13 @@ export async function getTmdbDetails(
 			"returned an unexpected details structure",
 		);
 	}
-	return normalized;
+	return mediaType === "tv"
+		? {
+				...normalized,
+				mediaType: "tv",
+				seasons: normalizeTvSeasons(
+					isRecord(parsed) ? parsed.seasons : undefined,
+				),
+			}
+		: normalized;
 }

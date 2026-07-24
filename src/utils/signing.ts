@@ -20,6 +20,7 @@
 /** Short prefix for the compact custom_id format. */
 export const CUSTOM_ID_PREFIX = "tb:a:";
 export const MEDIA_CUSTOM_ID_PREFIX = "tb:m:";
+export const SEASON_CUSTOM_ID_PREFIX = "tb:s:";
 export const SEPARATOR = ":";
 export const EXPIRY_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 
@@ -49,6 +50,16 @@ export interface MediaComponentPayload {
 	infoHash: "";
 	expiry: number;
 	mediaType: "movie" | "tv";
+	queryDigest: string;
+}
+
+export interface SeasonComponentPayload {
+	action: "season";
+	userId: string;
+	infoHash: "";
+	expiry: number;
+	seriesId: number;
+	page: number;
 	queryDigest: string;
 }
 
@@ -171,12 +182,16 @@ export async function buildCustomId(
 export async function parseAndVerifyCustomId(
 	customId: string,
 	secret: string,
-): Promise<ComponentPayload | MediaComponentPayload | null> {
+): Promise<
+	ComponentPayload | MediaComponentPayload | SeasonComponentPayload | null
+> {
 	const prefix = customId.startsWith(CUSTOM_ID_PREFIX)
 		? CUSTOM_ID_PREFIX
 		: customId.startsWith(MEDIA_CUSTOM_ID_PREFIX)
 			? MEDIA_CUSTOM_ID_PREFIX
-			: null;
+			: customId.startsWith(SEASON_CUSTOM_ID_PREFIX)
+				? SEASON_CUSTOM_ID_PREFIX
+				: null;
 	if (!prefix) {
 		return null;
 	}
@@ -197,7 +212,9 @@ export async function parseAndVerifyCustomId(
 	const parsed =
 		prefix === CUSTOM_ID_PREFIX
 			? decodePayload(payload)
-			: decodeMediaPayload(payload);
+			: prefix === MEDIA_CUSTOM_ID_PREFIX
+				? decodeMediaPayload(payload)
+				: decodeSeasonPayload(payload);
 	if (!parsed) {
 		return null;
 	}
@@ -206,6 +223,49 @@ export async function parseAndVerifyCustomId(
 		return null; // expired
 	}
 	return parsed;
+}
+
+function encodeSeasonPayload(payload: SeasonComponentPayload): string {
+	const expirySeconds = Math.floor(payload.expiry / 1000);
+	return [
+		payload.userId,
+		String(expirySeconds),
+		String(payload.seriesId),
+		String(payload.page),
+		payload.queryDigest,
+	].join(SEPARATOR);
+}
+
+function decodeSeasonPayload(raw: string): SeasonComponentPayload | null {
+	const parts = raw.split(SEPARATOR);
+	if (parts.length !== 5) {
+		return null;
+	}
+	const [userId, expiryRaw, seriesIdRaw, pageRaw, queryDigest] = parts;
+	const expiry = Number(expiryRaw);
+	const seriesId = Number(seriesIdRaw);
+	const page = Number(pageRaw);
+	if (
+		!userId ||
+		!Number.isSafeInteger(expiry) ||
+		expiry <= 0 ||
+		!Number.isSafeInteger(seriesId) ||
+		seriesId <= 0 ||
+		!Number.isSafeInteger(page) ||
+		page < 0 ||
+		!/^[A-Za-z0-9_-]{16}$/.test(queryDigest)
+	) {
+		return null;
+	}
+	return {
+		action: "season",
+		userId,
+		infoHash: "",
+		expiry: expiry * 1000,
+		seriesId,
+		page,
+		queryDigest,
+	};
 }
 
 function encodeMediaPayload(payload: MediaComponentPayload): string {
@@ -269,6 +329,21 @@ export async function buildMediaCustomId(
 	return customId;
 }
 
+/** Build the compact signed custom ID for a TV season-selection page. */
+export async function buildSeasonCustomId(
+	payload: SeasonComponentPayload,
+	secret: string,
+): Promise<string> {
+	const encoded = encodeSeasonPayload(payload);
+	const signature = await signPayload(encoded, secret);
+	const customId =
+		`${SEASON_CUSTOM_ID_PREFIX}${encoded}${SEPARATOR}${signature}`;
+	if (customId.length > DISCORD_ID_LIMIT) {
+		throw new Error("generated season custom_id exceeds Discord 100-char limit");
+	}
+	return customId;
+}
+
 export function createMediaPayload(
 	userId: string,
 	mediaType: "movie" | "tv",
@@ -281,6 +356,24 @@ export function createMediaPayload(
 		mediaType,
 		queryDigest,
 		expiry: Date.now() + EXPIRY_WINDOW_MS,
+	};
+}
+
+export function createSeasonPayload(
+	userId: string,
+	seriesId: number,
+	page: number,
+	queryDigest: string,
+	expiry: number,
+): SeasonComponentPayload {
+	return {
+		action: "season",
+		userId,
+		infoHash: "",
+		expiry,
+		seriesId,
+		page,
+		queryDigest,
 	};
 }
 

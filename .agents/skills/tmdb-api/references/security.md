@@ -14,5 +14,11 @@
   100 characters. Option fields are bounded and mention parsing is disabled.
   `[impl+tests]`
 - A numeric selection never supplies trusted canonical metadata. Details are
-  re-fetched and normalized before Prowlarr is called. `[impl+tests]`
-- The exact-search fallback does not call TMDB details. `[impl+tests]`
+  re-fetched and normalized before Prowlarr is called; TV season selections
+  are additionally checked against the re-fetched normalized season list.
+  `[impl+tests]`
+- Season page custom IDs and option values are separately HMAC-bound to the
+  requester, expiry, series ID, page, and original-query digest. They contain
+  no title, query, or season list. `[impl+tests]`
+- The exact-search fallback does not make an additional TMDB details request.
+  `[impl+tests]`

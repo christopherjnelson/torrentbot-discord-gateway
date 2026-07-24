@@ -24,9 +24,29 @@ matches the signed payload. Discord signs the whole interaction request; the
 repository additionally validates field limits, option HMAC, and digest.
 `[impl+tests]`
 
-A media choice re-fetches `/movie/{id}` or `/tv/{id}` according to the signed
-media type. Prowlarr receives `canonical title + space + year` when a valid
-year exists, otherwise canonical title only. The exact-search choice makes no
-details request and sends the reconstructed original query directly to
-Prowlarr. Both paths reuse the same selectable/caching/release-menu workflow.
-`[impl+tests]`
+A movie choice re-fetches `/movie/{id}`. Prowlarr receives
+`canonical title + space + year` when a valid year exists, otherwise canonical
+title only. `[impl+tests]`
+
+A TV choice re-fetches `/tv/{id}`, normalizes its embedded season summaries,
+and renders a second signed menu. Page 1 contains `Complete series`; every page
+contains up to 20 seasons plus signed previous/next navigation as needed and a
+final `Search exactly as entered` option. Specials appears only for season 0
+and is displayed as `Specials`, never `Season 0`. Every normalized season is
+reachable and no page exceeds Discord's 25-option limit. `[impl+tests]`
+
+TV Complete produces `<canonical title> complete`; a season produces
+`<canonical title> S<at-least-two-digits>` (`0` → `S00`, `3` → `S03`,
+`100` → `S100`). A Complete/season choice re-fetches trusted TV details again,
+and a selected season must still exist before Prowlarr is called. No year,
+TMDB ID, episode count, or media label is appended. `[impl+tests]`
+
+The exact-search choice in either media menu makes no additional details
+request and sends the reconstructed original query directly to Prowlarr. All
+paths reuse the same selectable/caching/release-menu workflow. `[impl+tests]`
+
+Season custom IDs carry only action, requester, expiry, series ID, zero-based
+page, and the signed original-query digest. Season/action/page option values
+have a context-bound HMAC. Titles, original queries, and season lists are not
+embedded. Navigation preserves the original component expiry rather than
+extending it. `[impl+tests]`

@@ -199,7 +199,7 @@ describe("TMDB movie disambiguation", () => {
 });
 
 describe("TMDB TV disambiguation", () => {
-	it("uses TV details and builds Canonical Name YYYY", async () => {
+	it("uses TV details to build a season menu without calling Prowlarr", async () => {
 		const menu = await openMediaMenu("tv", "the office", [
 			{ id: 2316, name: "The Office", first_air_date: "2005-03-24" },
 		]);
@@ -216,25 +216,38 @@ describe("TMDB TV disambiguation", () => {
 					id: 2316,
 					name: "The Office",
 					first_air_date: "2005-03-24",
+					seasons: [
+						{ season_number: 0, episode_count: 2 },
+						{ season_number: 1, episode_count: 6 },
+					],
 				}),
 			);
-		let prowlarrQuery = "";
-		fetchMock
-			.get("https://prowlarr.test")
-			.intercept({ path: /^\/api\/v1\/search/ })
-			.reply((options) => {
-				prowlarrQuery = new URL(`https://prowlarr.test${options.path}`)
-					.searchParams.get("query") ?? "";
-				return { statusCode: 200, data: "[]" };
-			});
-		interceptOriginalResponseEdit();
+		const { captured } = interceptOriginalResponseEdit();
 		const selected = menu.components[0].components[0].options[0].value;
-		const { ctx } = await dispatchInteraction(
+		const { ctx, response } = await dispatchInteraction(
 			JSON.stringify(componentFromMenu(menu, selected)),
 			{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
 		);
+		expect(await response.json()).toMatchObject({
+			type: 7,
+			data: { components: [], allowed_mentions: { parse: [] } },
+		});
 		await waitOnExecutionContext(ctx);
-		expect(prowlarrQuery).toBe("The Office 2005");
+		expect(captured[0].body.content).toContain(
+			"Choose what to download for **The Office**:",
+		);
+		expect(captured[0].body.allowed_mentions).toEqual({ parse: [] });
+		const seasonSelect = (
+			captured[0].body.components as CapturedMenu["components"]
+		)[0].components[0];
+		expect(seasonSelect.options.map((option) => option.label)).toEqual([
+			"Complete series",
+			"Specials",
+			"Season 1",
+			"Search exactly as entered",
+		]);
+		expect(seasonSelect.options[1].description).toBe("S00 • 2 episodes");
+		expect(seasonSelect.options[2].description).toBe("S01 • 6 episodes");
 	});
 });
 

@@ -1,8 +1,9 @@
 # tmdb-api
 
 A focused Agent Skill for the TMDB v3 movie/TV disambiguation implemented by
-this repository. It documents only the four endpoints, normalized fields,
-component continuation, and security behavior TorrentBot actually uses.
+this repository. It documents only the four endpoints, normalized media and
+TV-season fields, component continuation, and security behavior TorrentBot
+actually uses.
 
 **Verification date:** 2026-07-24. Official-contract statements use
 `[docs 2026-07-24]`; repository behavior covered by implementation and tests
@@ -38,9 +39,10 @@ Read this skill and all files in `references/` before modifying:
    only the fields documented here. `[impl+tests]`
 4. Preserve upstream search order, deduplicate exact IDs, and keep the TMDB
    result cap separate from Prowlarr/Discord caps. `[impl+tests]`
-5. Never trust a client-supplied title/year after selection. Re-fetch the
-   official details endpoint by the signed menu's media type and selected
-   numeric ID. `[impl+tests]`
+5. Never trust client-supplied title/year/season metadata after selection.
+   Re-fetch the official details endpoint by the signed menu's media type and
+   selected numeric ID; selected TV seasons must exist in its normalized
+   embedded season list. `[impl+tests]`
 6. Update this skill whenever a TMDB endpoint, normalized field, auth rule,
    or media workflow changes.
 

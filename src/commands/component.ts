@@ -27,6 +27,7 @@ import {
 	type TorrentReadiness,
 } from "../services/torbox";
 import { getTmdbDetails } from "../services/tmdb";
+import type { TvDetails } from "../types/media";
 import type { TorboxTorrent } from "../types/torbox";
 import {
 	UpstreamApiError,
@@ -38,6 +39,15 @@ import { formatBytes, sanitizeInline } from "../utils/format";
 import type { TorrentResult } from "../types/search";
 import { completeSearch, formatResultDescription } from "./search";
 import { extractMediaSelection } from "./media";
+import {
+	buildSeasonComponents,
+	buildTvSeasonQuery,
+	extractSeasonSelection,
+	formatSeasonHeading,
+	nextSeasonPayload,
+	seasonPageCount,
+	type SeasonSelection,
+} from "./season";
 import {
 	logDiscordApiFailure,
 	logUpstreamFailure,
@@ -51,6 +61,9 @@ import {
 	isValidInfoHash,
 	MAX_SELECT_OPTIONS,
 	SELECT_OPTION_CAP,
+	createSeasonPayload,
+	type MediaComponentPayload,
+	type SeasonComponentPayload,
 } from "../utils/signing";
 
 /**
@@ -148,7 +161,46 @@ export async function handleComponentInteraction(
 		ctx.waitUntil(
 			processMediaComponentInteraction(
 				interaction,
-				payload.mediaType,
+				payload,
+				selection,
+				config,
+			),
+		);
+		return updateMessageResponse({ components: [] });
+	}
+
+	if (payload.action === "season") {
+		if (!config.prowlarrUrl || !config.prowlarrApiKey) {
+			return messageResponse(
+				"TV lookup is not configured on this bot.",
+				true,
+			);
+		}
+		const selection = await extractSeasonSelection(
+			interaction,
+			payload,
+			config.componentSigningSecret,
+		);
+		if (!selection) {
+			return messageResponse(
+				"That season selection is no longer available. Please run the search again.",
+				true,
+			);
+		}
+		if (selection.kind === "exact") {
+			ctx.waitUntil(completeSearch(interaction, selection.query, config));
+			return updateMessageResponse({ components: [] });
+		}
+		if (!config.tmdbReadAccessToken) {
+			return messageResponse(
+				"TV lookup is not configured on this bot.",
+				true,
+			);
+		}
+		ctx.waitUntil(
+			processSeasonComponentInteraction(
+				interaction,
+				payload,
 				selection,
 				config,
 			),
@@ -183,7 +235,7 @@ export async function handleComponentInteraction(
 
 async function processMediaComponentInteraction(
 	interaction: DiscordInteraction,
-	mediaType: "movie" | "tv",
+	payload: MediaComponentPayload,
 	selection:
 		| { kind: "media"; id: number; query: string }
 		| { kind: "fallback"; query: string },
@@ -196,7 +248,58 @@ async function processMediaComponentInteraction(
 
 	let canonicalQuery: string;
 	try {
-		const details = await getTmdbDetails(mediaType, selection.id, {
+		if (payload.mediaType === "tv") {
+			const startedAt = Date.now();
+			const details = await getTmdbDetails("tv", selection.id, {
+				readAccessToken: config.tmdbReadAccessToken as string,
+				timeoutMs: config.upstreamTimeoutMs,
+			});
+			console.info(
+				JSON.stringify({
+					operation: "tmdb_tv_details",
+					outcome: "success",
+					elapsedMs: Date.now() - startedAt,
+					seriesId: details.id,
+					seasonCount: details.seasons.length,
+					page: 0,
+				}),
+			);
+			const seasonPayload = createSeasonPayload(
+				payload.userId,
+				details.id,
+				0,
+				payload.queryDigest,
+				payload.expiry,
+			);
+			const components = await buildSeasonComponents(
+				details,
+				selection.query,
+				seasonPayload,
+				config.componentSigningSecret as string,
+			);
+			try {
+				await editOriginalResponse(
+					interaction.application_id,
+					interaction.token,
+					{
+						content: formatSeasonHeading(
+							details.title,
+							selection.query,
+							details.seasons.length > 0,
+						),
+						components,
+					},
+				);
+			} catch (error) {
+				logDiscordApiFailure(
+					"failed to edit interaction response",
+					error,
+				);
+			}
+			return;
+		}
+
+		const details = await getTmdbDetails("movie", selection.id, {
 			readAccessToken: config.tmdbReadAccessToken as string,
 			timeoutMs: config.upstreamTimeoutMs,
 		});
@@ -224,6 +327,125 @@ async function processMediaComponentInteraction(
 		return;
 	}
 
+	await completeSearch(interaction, canonicalQuery, config);
+}
+
+async function editSeasonSelectionUnavailable(
+	interaction: DiscordInteraction,
+): Promise<void> {
+	try {
+		await editOriginalResponse(
+			interaction.application_id,
+			interaction.token,
+			{
+				content:
+					"That season selection is no longer available. Please run the search again.",
+			},
+		);
+	} catch (error) {
+		logDiscordApiFailure("failed to edit interaction response", error);
+	}
+}
+
+async function processSeasonComponentInteraction(
+	interaction: DiscordInteraction,
+	payload: SeasonComponentPayload,
+	selection: Exclude<SeasonSelection, { kind: "exact" }>,
+	config: AppConfig,
+): Promise<void> {
+	const startedAt = Date.now();
+	let details: TvDetails;
+	try {
+		details = await getTmdbDetails("tv", payload.seriesId, {
+			readAccessToken: config.tmdbReadAccessToken as string,
+			timeoutMs: config.upstreamTimeoutMs,
+		});
+		console.info(
+			JSON.stringify({
+				operation: "tmdb_tv_details",
+				outcome: "success",
+				elapsedMs: Date.now() - startedAt,
+				seriesId: details.id,
+				seasonCount: details.seasons.length,
+				page:
+					selection.kind === "page"
+						? selection.page
+						: payload.page,
+			}),
+		);
+	} catch (error) {
+		logUpstreamFailure("tmdb details failed", error);
+		try {
+			await editOriginalResponse(
+				interaction.application_id,
+				interaction.token,
+				{
+					content:
+						"The media lookup service is unavailable right now. Please try again.",
+				},
+			);
+		} catch (discordError) {
+			logDiscordApiFailure(
+				"failed to edit interaction response",
+				discordError,
+			);
+		}
+		return;
+	}
+
+	if (selection.kind === "page") {
+		if (
+			selection.page < 0 ||
+			selection.page >= seasonPageCount(details.seasons)
+		) {
+			await editSeasonSelectionUnavailable(interaction);
+			return;
+		}
+		try {
+			const nextPayload = nextSeasonPayload(payload, selection.page);
+			await editOriginalResponse(
+				interaction.application_id,
+				interaction.token,
+				{
+					content: formatSeasonHeading(
+						details.title,
+						selection.query,
+						details.seasons.length > 0,
+					),
+					components: await buildSeasonComponents(
+						details,
+						selection.query,
+						nextPayload,
+						config.componentSigningSecret as string,
+					),
+				},
+			);
+		} catch (error) {
+			logDiscordApiFailure("failed to edit interaction response", error);
+		}
+		return;
+	}
+
+	if (
+		selection.kind === "season" &&
+		!details.seasons.some(
+			(season) => season.seasonNumber === selection.seasonNumber,
+		)
+	) {
+		await editSeasonSelectionUnavailable(interaction);
+		return;
+	}
+
+	const canonicalQuery = buildTvSeasonQuery(
+		details.title,
+		selection.kind === "complete"
+			? "complete"
+			: selection.seasonNumber,
+	);
+	if (!canonicalQuery) {
+		await editSeasonSelectionUnavailable(interaction);
+		return;
+	}
 	await completeSearch(interaction, canonicalQuery, config);
 }
 

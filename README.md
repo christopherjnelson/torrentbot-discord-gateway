@@ -26,8 +26,9 @@ Cloudflare Worker ────────────────────�
 n8n / automation ──► /api/* (Bearer auth) ──────┘
 ```
 
-General search goes directly to Prowlarr. Movie and TV search uses TMDB only
-to choose a canonical title/year, then searches that text through Prowlarr.
+General search goes directly to Prowlarr. Movie search uses TMDB to choose a
+canonical title/year. TV search uses TMDB to choose a series and then Complete
+series, Specials, or a numbered season before searching Prowlarr.
 Torrent management goes directly to TorBox. The TorBox Voyager/Torznab
 endpoint (`search-api.torbox.app`) is **not** used and no Voyager API key is
 required.
@@ -51,7 +52,7 @@ Get TorrentBot up and running in 6 steps:
 | --- | --- | --- |
 | `/search general query:<text>` | Search all configured Prowlarr indexers directly; TMDB is never called | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
 | `/search movie query:<title>` | Search TMDB movies, choose a canonical title/year or `Search exactly as entered`, then search releases through Prowlarr | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
-| `/search tv query:<title>` | Search TMDB TV series, choose a canonical name/first-air year or `Search exactly as entered`, then search releases through Prowlarr | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
+| `/search tv query:<title>` | Search TMDB TV series, choose Complete series, Specials, a numbered season, or `Search exactly as entered`, then search releases through Prowlarr | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
 | `/add magnet:<uri>` | Submit a magnet URI to TorBox | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
 | `/status` | List the TorBox account's downloads (ephemeral); ready torrents include temporary download links | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
 
@@ -72,20 +73,40 @@ via `ctx.waitUntil`, and edit the original response through the follow-up webhoo
 `/add` and `/status` defer ephemerally and complete the same way.
 
 `/search general` bypasses TMDB entirely. `/search movie` calls
-`GET /3/search/movie`; `/search tv` calls `GET /3/search/tv`. Media choices
-are shown in deterministic upstream order (up to 10), using canonical
+`GET /3/search/movie`; `/search tv` calls `GET /3/search/tv`. Initial media
+choices are shown in deterministic upstream order (up to 10), using canonical
 title/name and year. Selecting a media item re-fetches the corresponding
 `GET /3/movie/{id}` or `GET /3/tv/{id}` details record so client-provided
-title/year data is never trusted. Prowlarr receives `<canonical title> <year>`
-when a valid year exists, otherwise just the canonical title.
+title/year data is never trusted.
 
-Every media menu ends with **Search exactly as entered**. That selection
-bypasses the TMDB details lookup and sends the original validated query
-directly to Prowlarr. The exact query remains in the bot-authored heading with
-reversible escaping and is accepted only when it matches the signed query
-digest. Numeric TMDB IDs use hidden, integrity-checked option values; the
-compact custom ID contains no title or query and remains signed,
+Movie selection is unchanged: Prowlarr receives
+`<canonical title> <year>` when a valid year exists, otherwise just the
+canonical title. TV details also contain TMDB's season summaries. After a
+series is chosen, TorrentBot presents **Complete series**, **Specials** when
+season 0 exists, every returned numbered season, and
+**Search exactly as entered**. The resulting Prowlarr queries are predictable:
+
+```text
+Breaking Bad complete
+Breaking Bad S03
+Doctor Who S00
+```
+
+Specials maps to `S00`; positive season numbers use at least two digits and
+are not truncated above 99. No year, TMDB ID, episode count, or media label is
+appended. Long-running series use signed pages of 20 seasons, so no returned
+season is silently omitted. Episode selection is not currently supported.
+
+Every media and TV season menu retains **Search exactly as entered**. That
+selection bypasses season canonicalization and makes no additional TMDB
+details request; it sends the original validated query directly to Prowlarr.
+The exact query remains in the bot-authored heading with reversible escaping
+and is accepted only when it matches the signed query digest. Numeric TMDB IDs,
+season numbers, and page navigation use compact integrity-checked values. The
+custom IDs contain no title, query, or season list and remain signed,
 requester-bound, expiring, and within Discord's 100-character limit.
+
+General and movie searches do not use the season-selection step.
 
 When Prowlarr returns results with valid info hashes, `/search` includes a
 Discord select menu component (placeholder: "Select a release to download").
@@ -260,7 +281,7 @@ Fill in `.dev.vars` (never commit it — it is git-ignored):
 | `DISCORD_BOT_TOKEN` | secret | Command registration script only |
 | `DISCORD_GUILD_ID` | id | Guild-scoped command registration |
 | `PROWLARR_API_KEY` | secret | Prowlarr search (`X-Api-Key` header) |
-| `TMDB_READ_ACCESS_TOKEN` | secret | TMDB movie/TV search and selected-record details (`Authorization: Bearer …`); general search does not use it |
+| `TMDB_READ_ACCESS_TOKEN` | secret | TMDB movie/TV search and selected-record details, including TV season summaries (`Authorization: Bearer …`); general search does not use it |
 | `TORBOX_API_KEY` | secret | TorBox API (`/add`, `/status`, `/api/torrents`) |
 | `INTERNAL_API_TOKEN` | secret | Bearer token for `/api/*` (generate a long random string) |
 | `COMPONENT_SIGNING_SECRET` | secret | HMAC-SHA-256 signing for Discord component interactions (generate with `openssl rand -hex 32`) |
@@ -311,8 +332,8 @@ and can be edited there or in the Cloudflare dashboard.
 6. Enter the Interactions Endpoint URL in the Discord Developer Portal.
 7. First real searches: run `/search general query:ubuntu`,
    `/search movie query:star wars`, and `/search tv query:breaking bad`.
-   Confirm that only movie/TV display a TMDB choice menu and all three reach
-   the normal Prowlarr release menu.
+   Confirm that movie/TV display a TMDB choice menu, TV adds a season choice,
+   and all three reach the normal Prowlarr release menu.
 
 ## Security Model
 
@@ -460,6 +481,8 @@ responses never include download URLs, file lists, or server paths.
   (largest non-sample media file, sample/NFO/subtitle exclusion) is not
   implemented, because the documented TorBox `zip_link` archive option is
   available and avoids guessing at individual files.
+- **No TV episode selection**: TV search can choose Complete series, Specials,
+  or a numbered season. It does not choose an individual episode.
 - **Temporary links**: generated TorBox download URLs are temporary CDN links
   (~3 hours for starting a download), as documented. They are not persisted
   by the bot.

@@ -14,3 +14,15 @@ export interface MediaSearchResult {
 	year: number | null;
 	popularity: number | null;
 }
+
+/** Trusted, normalized season metadata returned with TMDB TV details. */
+export interface TvSeasonSummary {
+	seasonNumber: number;
+	episodeCount: number | null;
+}
+
+/** TV details add only the season fields needed by the selection workflow. */
+export interface TvDetails extends MediaSearchResult {
+	mediaType: "tv";
+	seasons: TvSeasonSummary[];
+}

@@ -2,6 +2,7 @@ import { fetchMock } from "cloudflare:test";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
 	getTmdbDetails,
+	normalizeTvSeasons,
 	searchTmdb,
 	TMDB_SEARCH_RESULT_CAP,
 } from "../src/services/tmdb";
@@ -209,6 +210,14 @@ describe("TMDB details client", () => {
 					name: "The Office",
 					original_name: "The Office",
 					first_air_date: "",
+					seasons: [
+						{
+							season_number: 1,
+							episode_count: 6,
+							name: "Season 1",
+							air_date: "2005-03-24",
+						},
+					],
 				}),
 			);
 		await expect(
@@ -217,6 +226,7 @@ describe("TMDB details client", () => {
 			title: "The Office",
 			year: null,
 			mediaType: "tv",
+			seasons: [{ seasonNumber: 1, episodeCount: 6 }],
 		});
 	});
 
@@ -228,5 +238,63 @@ describe("TMDB details client", () => {
 		await expect(
 			getTmdbDetails("movie", 11, { readAccessToken: TOKEN }),
 		).rejects.toBeInstanceOf(UpstreamParseError);
+	});
+});
+
+describe("TMDB TV season normalization", () => {
+	it("normalizes, deduplicates, and numerically sorts valid season summaries", () => {
+		expect(
+			normalizeTvSeasons([
+				{
+					season_number: 10,
+					episode_count: 12,
+					name: "Season 10",
+					air_date: "2020-01-01",
+				},
+				{
+					season_number: 0,
+					episode_count: 5,
+					name: "Specials",
+					air_date: null,
+				},
+				{ season_number: -1, episode_count: 1 },
+				{ season_number: 1.5, episode_count: 2 },
+				{ season_number: Number.POSITIVE_INFINITY, episode_count: 3 },
+				{ season_number: 2, episode_count: null },
+				{ season_number: 2, episode_count: 99 },
+				{ season_number: 1 },
+				null,
+				"malformed",
+			]),
+		).toEqual([
+			{ seasonNumber: 0, episodeCount: 5 },
+			{ seasonNumber: 1, episodeCount: null },
+			{ seasonNumber: 2, episodeCount: null },
+			{ seasonNumber: 10, episodeCount: 12 },
+		]);
+	});
+
+	it.each([undefined, null, {}, "seasons"])(
+		"degrades a non-array seasons field to an empty list",
+		(value) => {
+			expect(normalizeTvSeasons(value)).toEqual([]);
+		},
+	);
+
+	it("does not require season names, dates, or episode counts", () => {
+		expect(
+			normalizeTvSeasons([
+				{ season_number: 3 },
+				{
+					season_number: 4,
+					name: { untrusted: true },
+					air_date: 42,
+					episode_count: -1,
+				},
+			]),
+		).toEqual([
+			{ seasonNumber: 3, episodeCount: null },
+			{ seasonNumber: 4, episodeCount: null },
+		]);
 	});
 });

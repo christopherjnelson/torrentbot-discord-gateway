@@ -89,7 +89,7 @@ function parseOptionValue(raw: string): ParsedMediaValue | null {
 	};
 }
 
-function escapeHeadingQuery(query: string): string {
+export function escapeHeadingQuery(query: string): string {
 	let output = "";
 	for (const character of query) {
 		const code = character.codePointAt(0) ?? 0;
@@ -104,7 +104,7 @@ function escapeHeadingQuery(query: string): string {
 	return output;
 }
 
-function unescapeHeadingQuery(value: string): string | null {
+export function unescapeHeadingQuery(value: string): string | null {
 	let output = "";
 	for (let index = 0; index < value.length; index++) {
 		if (value[index] !== "\\") {
