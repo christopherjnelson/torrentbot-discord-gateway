@@ -12,6 +12,7 @@ import {
 	type DiscordInteraction,
 } from "../discord/types";
 import { searchProwlarr } from "../services/prowlarr";
+import { searchTmdb } from "../services/tmdb";
 import { checkTorrentCache } from "../services/torbox";
 import type { TorrentResult } from "../types/search";
 import {
@@ -30,6 +31,8 @@ import {
 	SELECT_OPTION_CAP,
 } from "../utils/signing";
 import { buildSelectableOptions } from "../utils/selectable";
+import { buildMediaComponents, formatMediaHeading } from "./media";
+import type { MediaType } from "../types/media";
 
 export const SEARCH_COMMAND_NAME = "search";
 export const MAX_SEARCH_RESULTS = 10;
@@ -194,7 +197,7 @@ async function enrichWithCacheStatus(
 	}
 }
 
-async function completeSearch(
+export async function completeSearch(
 	interaction: DiscordInteraction,
 	query: string,
 	config: AppConfig,
@@ -254,6 +257,77 @@ async function completeSearch(
 	}
 }
 
+async function completeMediaLookup(
+	interaction: DiscordInteraction,
+	mediaType: MediaType,
+	query: string,
+	config: AppConfig,
+): Promise<void> {
+	const startedAt = Date.now();
+	let content: string;
+	let components: object[] | undefined;
+	try {
+		const results = await searchTmdb(mediaType, query, {
+			readAccessToken: config.tmdbReadAccessToken as string,
+			timeoutMs: config.upstreamTimeoutMs,
+		});
+		console.info(
+			JSON.stringify({
+				operation: "tmdb_search",
+				mediaType,
+				outcome: "success",
+				elapsedMs: Date.now() - startedAt,
+				queryLength: query.length,
+				resultCount: results.length,
+			}),
+		);
+		if (results.length === 0) {
+			content =
+				mediaType === "movie"
+					? "No matching movies were found. Try `/search general` to search exactly as entered."
+					: "No matching TV series were found. Try `/search general` to search exactly as entered.";
+		} else {
+			const userId = getInvokerId(interaction);
+			if (!userId || !config.componentSigningSecret) {
+				throw new Error("media component configuration unavailable");
+			}
+			content = formatMediaHeading(mediaType, query);
+			components = await buildMediaComponents(
+				results,
+				mediaType,
+				query,
+				userId,
+				config.componentSigningSecret,
+			);
+		}
+	} catch (error) {
+		logUpstreamFailure("tmdb search failed", error);
+		console.info(
+			JSON.stringify({
+				operation: "tmdb_search",
+				mediaType,
+				outcome: "failure",
+				elapsedMs: Date.now() - startedAt,
+				queryLength: query.length,
+				errorCategory:
+					error instanceof Error ? error.name : "unknown",
+			}),
+		);
+		content =
+			"The media lookup service is unavailable right now. Please try again.";
+	}
+
+	try {
+		await editOriginalResponse(
+			interaction.application_id,
+			interaction.token,
+			{ content, components },
+		);
+	} catch (error) {
+		logDiscordApiFailure("failed to edit interaction response", error);
+	}
+}
+
 /**
  * Handle `/search <general|movie|tv> query:<string>`. General defers
  * immediately (Discord's initial
@@ -281,13 +355,6 @@ export function handleSearchCommand(
 		return messageResponse(guildAuthMessage(authStatus), true);
 	}
 
-	if (route.kind !== "general") {
-		return messageResponse(
-			"Movie and TV media lookup is not available yet. Please use `/search general` for now.",
-			true,
-		);
-	}
-
 	if (!config.prowlarrUrl || !config.prowlarrApiKey) {
 		return messageResponse(
 			"Search is not configured on this bot. The owner needs to set the Prowlarr URL and API key.",
@@ -295,6 +362,20 @@ export function handleSearchCommand(
 		);
 	}
 
-	ctx.waitUntil(completeSearch(interaction, route.query, config));
-	return deferredMessageResponse();
+	if (
+		route.kind !== "general" &&
+		(!config.tmdbReadAccessToken || !config.componentSigningSecret)
+	) {
+		return messageResponse(
+			"Movie and TV lookup is not configured on this bot.",
+			true,
+		);
+	}
+
+	ctx.waitUntil(
+		route.kind === "general"
+			? completeSearch(interaction, route.query, config)
+			: completeMediaLookup(interaction, route.kind, route.query, config),
+	);
+	return deferredMessageResponse(true);
 }

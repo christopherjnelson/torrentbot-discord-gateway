@@ -7,6 +7,7 @@ import {
 import {
 	createFollowupMessage,
 	editFollowupMessage,
+	editOriginalResponse,
 } from "../discord/client";
 import {
 	messageResponse,
@@ -25,6 +26,7 @@ import {
 	waitForTorrentReady,
 	type TorrentReadiness,
 } from "../services/torbox";
+import { getTmdbDetails } from "../services/tmdb";
 import type { TorboxTorrent } from "../types/torbox";
 import {
 	UpstreamApiError,
@@ -34,7 +36,8 @@ import {
 } from "../utils/errors";
 import { formatBytes, sanitizeInline } from "../utils/format";
 import type { TorrentResult } from "../types/search";
-import { formatResultDescription } from "./search";
+import { completeSearch, formatResultDescription } from "./search";
+import { extractMediaSelection } from "./media";
 import {
 	logDiscordApiFailure,
 	logUpstreamFailure,
@@ -88,15 +91,6 @@ export async function handleComponentInteraction(
 		);
 	}
 
-	// Get the selected info hash from the option value first (quick validation).
-	const selectedHash = data.values?.[0];
-	if (!selectedHash || !isValidInfoHash(selectedHash)) {
-		return messageResponse(
-			"Invalid selection. Please try again.",
-			true,
-		);
-	}
-
 	// Verify the signed payload (HMAC-SHA-256, CPU-only).
 	const payload = await parseAndVerifyCustomId(
 		data.custom_id,
@@ -127,6 +121,50 @@ export async function handleComponentInteraction(
 		return messageResponse(guildAuthMessage(authStatus), true);
 	}
 
+	if (payload.action === "media") {
+		if (
+			!config.prowlarrUrl ||
+			!config.prowlarrApiKey
+		) {
+			return messageResponse(
+				"Movie and TV lookup is not configured on this bot.",
+				true,
+			);
+		}
+		const selection = await extractMediaSelection(
+			interaction,
+			payload,
+			config.componentSigningSecret,
+		);
+		if (!selection) {
+			return messageResponse("Invalid selection. Please try again.", true);
+		}
+		if (selection.kind === "media" && !config.tmdbReadAccessToken) {
+			return messageResponse(
+				"Movie and TV lookup is not configured on this bot.",
+				true,
+			);
+		}
+		ctx.waitUntil(
+			processMediaComponentInteraction(
+				interaction,
+				payload.mediaType,
+				selection,
+				config,
+			),
+		);
+		return updateMessageResponse({ components: [] });
+	}
+
+	// Release menus carry a BTIH hash as the selected option value.
+	const selectedHash = data.values?.[0];
+	if (!selectedHash || !isValidInfoHash(selectedHash)) {
+		return messageResponse(
+			"Invalid selection. Please try again.",
+			true,
+		);
+	}
+
 	// Check TorBox is configured.
 	if (!config.torboxApiKey) {
 		return messageResponse(
@@ -141,6 +179,52 @@ export async function handleComponentInteraction(
 		processComponentInteraction(interaction, selectedHash, config),
 	);
 	return updateMessageResponse({ components: [] });
+}
+
+async function processMediaComponentInteraction(
+	interaction: DiscordInteraction,
+	mediaType: "movie" | "tv",
+	selection:
+		| { kind: "media"; id: number; query: string }
+		| { kind: "fallback"; query: string },
+	config: AppConfig,
+): Promise<void> {
+	if (selection.kind === "fallback") {
+		await completeSearch(interaction, selection.query, config);
+		return;
+	}
+
+	let canonicalQuery: string;
+	try {
+		const details = await getTmdbDetails(mediaType, selection.id, {
+			readAccessToken: config.tmdbReadAccessToken as string,
+			timeoutMs: config.upstreamTimeoutMs,
+		});
+		canonicalQuery = details.year
+			? `${details.title} ${details.year}`
+			: details.title;
+		canonicalQuery = canonicalQuery.replace(/\s+/g, " ").trim();
+	} catch (error) {
+		logUpstreamFailure("tmdb details failed", error);
+		try {
+			await editOriginalResponse(
+				interaction.application_id,
+				interaction.token,
+				{
+					content:
+						"The media lookup service is unavailable right now. Please try again.",
+				},
+			);
+		} catch (discordError) {
+			logDiscordApiFailure(
+				"failed to edit interaction response",
+				discordError,
+			);
+		}
+		return;
+	}
+
+	await completeSearch(interaction, canonicalQuery, config);
 }
 
 /**

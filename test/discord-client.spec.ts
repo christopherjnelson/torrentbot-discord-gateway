@@ -86,8 +86,8 @@ describe("/search select menu payload", () => {
 		expect(opt1.description).toBeUndefined();
 		expect(opt1.label).toBe("Release B");
 
-		// No more than five options for this feature.
-		expect(select.options.length).toBeLessThanOrEqual(5);
+		// Release menus use the dedicated ten-result feature cap.
+		expect(select.options.length).toBeLessThanOrEqual(10);
 	});
 
 	it("returns null when no results carry an info hash", async () => {
@@ -132,7 +132,7 @@ describe("/search select menu payload", () => {
 		);
 
 		expect(response.status).toBe(200);
-		expect(await response.json()).toEqual({ type: 5 });
+		expect(await response.json()).toEqual({ type: 5, data: { flags: 64 } });
 
 		await waitOnExecutionContext(ctx);
 

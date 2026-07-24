@@ -299,30 +299,6 @@ describe("/search command", () => {
 		expect(body.data.content).toContain("1-200 characters");
 	});
 
-	it.each(["movie", "tv"])(
-		"routes %s safely without contacting upstreams in the typed-only phase",
-		async (kind) => {
-			const { response } = await dispatchInteraction(
-				JSON.stringify(
-					makeCommandInteraction("search", [
-						{
-							name: kind,
-							type: 1,
-							options: [
-								{ name: "query", type: 3, value: "blade runner" },
-							],
-						},
-					]),
-				),
-			);
-			const body = (await response.json()) as {
-				data: { flags?: number; content: string };
-			};
-			expect(body.data.flags).toBe(64);
-			expect(body.data.content).toContain("not available yet");
-		},
-	);
-
 	it("responds ephemerally when no Prowlarr API key is configured", async () => {
 		const { response } = await dispatchInteraction(
 			JSON.stringify(
@@ -383,7 +359,7 @@ describe("/search command", () => {
 
 		// Initial response is an immediate defer inside the 3s deadline.
 		expect(response.status).toBe(200);
-		expect(await response.json()).toEqual({ type: 5 });
+		expect(await response.json()).toEqual({ type: 5, data: { flags: 64 } });
 
 		await waitOnExecutionContext(ctx);
 
@@ -947,7 +923,10 @@ describe("/search TorBox cache enrichment", () => {
 
 			// The initial defer still succeeds (HTTP 200, type 5).
 			expect(response.status).toBe(200);
-			expect(await response.json()).toEqual({ type: 5 });
+			expect(await response.json()).toEqual({
+				type: 5,
+				data: { flags: 64 },
+			});
 
 			// The background phase must not throw or reject the Worker.
 			await waitOnExecutionContext(ctx);

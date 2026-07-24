@@ -6,7 +6,7 @@ the existing `/search` integration without re-researching or guessing the
 endpoint contract, authentication, result normalization, info-hash handling,
 duplicate behavior, failure handling, and Discord-enrichment boundary.
 
-**Verification date:** 2026-07-20 (skill authoring/reconfirmation date).
+**Verification date:** 2026-07-24 (workflow entry points reconfirmed).
 Official-Prowlarr-docs verification tags in the reference files use
 `[docs 2026-07-19]`, the date the repository records in
 `src/services/prowlarr.ts` and the `README.md` "External API assumptions"
@@ -22,8 +22,8 @@ Prowlarr results**, including:
 
 - `src/services/prowlarr.ts` (the typed Prowlarr search adapter),
 - `src/types/search.ts` (the normalized `TorrentResult` type),
-- `src/commands/search.ts` (the Discord `/search` command and TorBox cache
-  enrichment),
+- `src/commands/search.ts` (the Discord `/search general` command, canonical
+  media-search continuation, and TorBox cache enrichment),
 - `src/utils/selectable.ts` (selectable-result normalization for the menu),
 - `src/routes/api.ts` (the internal `/api/search` route),
 - any Prowlarr-related test or fixture (`test/prowlarr.spec.ts`,

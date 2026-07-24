@@ -27,6 +27,8 @@
 	},
 	// Secret bindings the Worker reads at runtime. Set values with
 	// `wrangler secret put <NAME>` (production) or in `.dev.vars` (local dev).
+	// TMDB_READ_ACCESS_TOKEN is sent only as a Bearer header for movie/TV
+	// search and details; /search general never reads or sends it.
 	// TORBOX_ALLOWED_GUILD_IDS is an optional comma-separated list of Discord
 	// guild (server) IDs whose members may run /search, /add, /status, and
 	// the search-result selection flow. Each entry must be a snowflake-style
@@ -35,6 +37,7 @@
 		"required": [
 			"DISCORD_PUBLIC_KEY",
 			"PROWLARR_API_KEY",
+			"TMDB_READ_ACCESS_TOKEN",
 			"TORBOX_API_KEY",
 			"INTERNAL_API_TOKEN",
 			"COMPONENT_SIGNING_SECRET",

@@ -1,0 +1,227 @@
+import type { MediaSearchResult, MediaType } from "../types/media";
+import {
+	ConfigError,
+	UpstreamParseError,
+	UpstreamStatusError,
+	UserInputError,
+} from "../utils/errors";
+import { fetchText } from "../utils/http";
+
+/**
+ * Minimal TMDB v3 adapter.
+ *
+ * Official contracts verified 2026-07-24:
+ * - GET /3/search/movie
+ * - GET /3/search/tv
+ * - GET /3/movie/{movie_id}
+ * - GET /3/tv/{series_id}
+ * - application authentication via Authorization: Bearer <read token>
+ *
+ * Only the fields represented by MediaSearchResult are read. Raw payloads,
+ * URLs, and authorization headers are never logged or placed in errors.
+ */
+
+const TMDB_SERVICE = "tmdb" as const;
+const TMDB_API_BASE = "https://api.themoviedb.org/3/";
+export const TMDB_SEARCH_RESULT_CAP = 10;
+const TMDB_MAX_PARSED_RESULTS = 50;
+const TMDB_MAX_QUERY_LENGTH = 200;
+const TMDB_MAX_TITLE_LENGTH = 200;
+
+export interface TmdbOptions {
+	readAccessToken: string;
+	timeoutMs?: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeQuery(query: string): string {
+	const normalized = query.trim();
+	if (
+		normalized.length === 0 ||
+		normalized.length > TMDB_MAX_QUERY_LENGTH
+	) {
+		throw new UserInputError("TMDB query must be 1-200 characters");
+	}
+	return normalized;
+}
+
+function normalizeTitle(value: unknown): string | null {
+	if (typeof value !== "string") {
+		return null;
+	}
+	let cleaned = "";
+	for (const character of value) {
+		const code = character.codePointAt(0) ?? 0;
+		cleaned += code < 32 || code === 127 ? " " : character;
+	}
+	cleaned = cleaned.replace(/\s+/g, " ").trim();
+	if (cleaned.length === 0) {
+		return null;
+	}
+	return Array.from(cleaned)
+		.slice(0, TMDB_MAX_TITLE_LENGTH)
+		.join("")
+		.trim() || null;
+}
+
+function normalizeId(value: unknown): number | null {
+	return typeof value === "number" &&
+		Number.isSafeInteger(value) &&
+		value > 0
+		? value
+		: null;
+}
+
+function normalizePopularity(value: unknown): number | null {
+	return typeof value === "number" &&
+		Number.isFinite(value) &&
+		value >= 0
+		? value
+		: null;
+}
+
+function normalizeYear(value: unknown): number | null {
+	if (typeof value !== "string") {
+		return null;
+	}
+	const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+	if (!match) {
+		return null;
+	}
+	const year = Number(match[1]);
+	const month = Number(match[2]);
+	const day = Number(match[3]);
+	if (year < 1000 || year > 9999) {
+		return null;
+	}
+	const timestamp = Date.UTC(year, month - 1, day);
+	const parsed = new Date(timestamp);
+	if (
+		parsed.getUTCFullYear() !== year ||
+		parsed.getUTCMonth() !== month - 1 ||
+		parsed.getUTCDate() !== day
+	) {
+		return null;
+	}
+	return year;
+}
+
+function normalizeMedia(
+	value: unknown,
+	mediaType: MediaType,
+): MediaSearchResult | null {
+	if (!isRecord(value)) {
+		return null;
+	}
+	const id = normalizeId(value.id);
+	const title = normalizeTitle(
+		mediaType === "movie" ? value.title : value.name,
+	);
+	if (id === null || title === null) {
+		return null;
+	}
+	return {
+		id,
+		mediaType,
+		title,
+		originalTitle: normalizeTitle(
+			mediaType === "movie" ? value.original_title : value.original_name,
+		),
+		year: normalizeYear(
+			mediaType === "movie" ? value.release_date : value.first_air_date,
+		),
+		popularity: normalizePopularity(value.popularity),
+	};
+}
+
+function buildUrl(path: string): URL {
+	const url = new URL(path, TMDB_API_BASE);
+	if (url.protocol !== "https:" || url.origin !== "https://api.themoviedb.org") {
+		throw new ConfigError("TMDB API endpoint is invalid");
+	}
+	return url;
+}
+
+async function requestJson(
+	url: URL,
+	options: TmdbOptions,
+): Promise<unknown> {
+	if (!options.readAccessToken.trim()) {
+		throw new ConfigError("TMDB read access token is not configured");
+	}
+	const { status, body } = await fetchText(url.toString(), {
+		service: TMDB_SERVICE,
+		timeoutMs: options.timeoutMs,
+		headers: {
+			accept: "application/json",
+			authorization: `Bearer ${options.readAccessToken}`,
+		},
+	});
+	if (status !== 200) {
+		throw new UpstreamStatusError(TMDB_SERVICE, status);
+	}
+	try {
+		return JSON.parse(body);
+	} catch {
+		throw new UpstreamParseError(TMDB_SERVICE, "returned invalid JSON");
+	}
+}
+
+/** Search movies or TV series, preserving upstream order and deduplicating IDs. */
+export async function searchTmdb(
+	mediaType: MediaType,
+	query: string,
+	options: TmdbOptions,
+): Promise<MediaSearchResult[]> {
+	const url = buildUrl(mediaType === "movie" ? "search/movie" : "search/tv");
+	url.searchParams.set("query", normalizeQuery(query));
+	url.searchParams.set("include_adult", "false");
+	url.searchParams.set("page", "1");
+
+	const parsed = await requestJson(url, options);
+	if (!isRecord(parsed) || !Array.isArray(parsed.results)) {
+		throw new UpstreamParseError(
+			TMDB_SERVICE,
+			"returned an unexpected JSON structure",
+		);
+	}
+
+	const seen = new Set<number>();
+	const results: MediaSearchResult[] = [];
+	for (const entry of parsed.results.slice(0, TMDB_MAX_PARSED_RESULTS)) {
+		const normalized = normalizeMedia(entry, mediaType);
+		if (!normalized || seen.has(normalized.id)) {
+			continue;
+		}
+		seen.add(normalized.id);
+		results.push(normalized);
+		if (results.length >= TMDB_SEARCH_RESULT_CAP) {
+			break;
+		}
+	}
+	return results;
+}
+
+/** Fetch trusted canonical title/year for a selected numeric TMDB ID. */
+export async function getTmdbDetails(
+	mediaType: MediaType,
+	id: number,
+	options: TmdbOptions,
+): Promise<MediaSearchResult> {
+	if (!Number.isSafeInteger(id) || id <= 0) {
+		throw new UserInputError("Invalid TMDB media ID");
+	}
+	const url = buildUrl(`${mediaType}/${id}`);
+	const parsed = await requestJson(url, options);
+	const normalized = normalizeMedia(parsed, mediaType);
+	if (!normalized || normalized.id !== id) {
+		throw new UpstreamParseError(
+			TMDB_SERVICE,
+			"returned an unexpected details structure",
+		);
+	}
+	return normalized;
+}

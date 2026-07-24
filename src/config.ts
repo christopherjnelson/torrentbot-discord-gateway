@@ -14,6 +14,8 @@ export interface AppConfig {
 	prowlarrUrl: string | undefined;
 	/** Prowlarr API key (sent as the X-Api-Key header). */
 	prowlarrApiKey: string | undefined;
+	/** TMDB API read access token for movie/TV disambiguation. */
+	tmdbReadAccessToken: string | undefined;
 	/** TorBox API key for /add and /status and /api/torrents. */
 	torboxApiKey: string | undefined;
 	/** Bearer token required on all /api/* routes. */
@@ -112,6 +114,7 @@ export function getConfig(env: Env): AppConfig {
 		discordPublicKey: readString(env.DISCORD_PUBLIC_KEY),
 		prowlarrUrl: readString(env.PROWLARR_URL),
 		prowlarrApiKey: readString(env.PROWLARR_API_KEY),
+		tmdbReadAccessToken: readString(env.TMDB_READ_ACCESS_TOKEN),
 		torboxApiKey: readString(env.TORBOX_API_KEY),
 		internalApiToken: readString(env.INTERNAL_API_TOKEN),
 		torboxAllowedGuildIds: parseAllowedGuildIds(env.TORBOX_ALLOWED_GUILD_IDS),

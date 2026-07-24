@@ -3,14 +3,27 @@
 Tag legend: `[impl+tests]` = verified by implementation + passing tests;
 `[docs 2026-07-19]` = verified against official Prowlarr source on 2026-07-19.
 
-## Discord `/search` end-to-end flow `[impl+tests]`
+## Discord entry points `[impl+tests]`
+
+- `/search general query:<text>` sends the validated query directly to
+  Prowlarr and never calls TMDB.
+- A selected `/search movie` or `/search tv` result re-fetches trusted
+  canonical metadata, then enters this workflow with
+  `<canonical title> <year>` (or title only when year is unavailable).
+- `Search exactly as entered` bypasses TMDB details and enters this workflow
+  with the original validated query.
+
+All three entry points share the exact normalization, selectable BTIH,
+deduplication, cache enrichment, and release-menu path below.
+
+## Discord Prowlarr end-to-end flow `[impl+tests]`
 
 ```
-Discord /search query:<text>
+Discord /search general query:<text> or validated media continuation
   → validate query (1–200 chars; else ephemeral usage error)
   → authorize guild (TORBOX_ALLOWED_GUILD_IDS; else ephemeral deny)
   → confirm PROWLARR_URL + PROWLARR_API_KEY configured (else ephemeral error)
-  → defer (Discord type 5); run the rest in ctx.waitUntil
+  → defer ephemerally (Discord type 5, flag 64); run the rest in ctx.waitUntil
   → searchProwlarr(query, { limit: 25 })   [GET /api/v1/search]
   → normalize each release → TorrentResult
   → sortResults (seeders desc, size desc, title asc, stable)

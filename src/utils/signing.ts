@@ -19,6 +19,7 @@
 
 /** Short prefix for the compact custom_id format. */
 export const CUSTOM_ID_PREFIX = "tb:a:";
+export const MEDIA_CUSTOM_ID_PREFIX = "tb:m:";
 export const SEPARATOR = ":";
 export const EXPIRY_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 
@@ -39,6 +40,16 @@ export interface ComponentPayload {
 	userId: string;
 	infoHash: string;
 	expiry: number;
+	action?: "release";
+}
+
+export interface MediaComponentPayload {
+	action: "media";
+	userId: string;
+	infoHash: "";
+	expiry: number;
+	mediaType: "movie" | "tv";
+	queryDigest: string;
 }
 
 /**
@@ -160,11 +171,16 @@ export async function buildCustomId(
 export async function parseAndVerifyCustomId(
 	customId: string,
 	secret: string,
-): Promise<ComponentPayload | null> {
-	if (!customId.startsWith(CUSTOM_ID_PREFIX)) {
+): Promise<ComponentPayload | MediaComponentPayload | null> {
+	const prefix = customId.startsWith(CUSTOM_ID_PREFIX)
+		? CUSTOM_ID_PREFIX
+		: customId.startsWith(MEDIA_CUSTOM_ID_PREFIX)
+			? MEDIA_CUSTOM_ID_PREFIX
+			: null;
+	if (!prefix) {
 		return null;
 	}
-	const signedPart = customId.slice(CUSTOM_ID_PREFIX.length);
+	const signedPart = customId.slice(prefix.length);
 	const lastSep = signedPart.lastIndexOf(SEPARATOR);
 	if (lastSep === -1) {
 		return null;
@@ -178,7 +194,10 @@ export async function parseAndVerifyCustomId(
 	if (!valid) {
 		return null;
 	}
-	const parsed = decodePayload(payload);
+	const parsed =
+		prefix === CUSTOM_ID_PREFIX
+			? decodePayload(payload)
+			: decodeMediaPayload(payload);
 	if (!parsed) {
 		return null;
 	}
@@ -187,6 +206,82 @@ export async function parseAndVerifyCustomId(
 		return null; // expired
 	}
 	return parsed;
+}
+
+function encodeMediaPayload(payload: MediaComponentPayload): string {
+	const expirySeconds = Math.floor(payload.expiry / 1000);
+	const mediaCode = payload.mediaType === "movie" ? "m" : "t";
+	return [
+		payload.userId,
+		String(expirySeconds),
+		mediaCode,
+		payload.queryDigest,
+	].join(SEPARATOR);
+}
+
+function decodeMediaPayload(raw: string): MediaComponentPayload | null {
+	const parts = raw.split(SEPARATOR);
+	if (parts.length !== 4) {
+		return null;
+	}
+	const [userId, expiryRaw, mediaCode, queryDigest] = parts;
+	const expiry = Number(expiryRaw);
+	if (
+		!userId ||
+		!Number.isSafeInteger(expiry) ||
+		expiry <= 0 ||
+		(mediaCode !== "m" && mediaCode !== "t") ||
+		!/^[A-Za-z0-9_-]{16}$/.test(queryDigest)
+	) {
+		return null;
+	}
+	return {
+		action: "media",
+		userId,
+		infoHash: "",
+		expiry: expiry * 1000,
+		mediaType: mediaCode === "m" ? "movie" : "tv",
+		queryDigest,
+	};
+}
+
+/** SHA-256 digest used to bind reconstructed continuation data to a menu. */
+export async function digestComponentQuery(query: string): Promise<string> {
+	const digest = await crypto.subtle.digest(
+		"SHA-256",
+		new TextEncoder().encode(query),
+	);
+	return base64url(new Uint8Array(digest).slice(0, 12));
+}
+
+/** Build the compact signed custom ID for a TMDB disambiguation menu. */
+export async function buildMediaCustomId(
+	payload: MediaComponentPayload,
+	secret: string,
+): Promise<string> {
+	const encoded = encodeMediaPayload(payload);
+	const signature = await signPayload(encoded, secret);
+	const customId =
+		`${MEDIA_CUSTOM_ID_PREFIX}${encoded}${SEPARATOR}${signature}`;
+	if (customId.length > DISCORD_ID_LIMIT) {
+		throw new Error("generated media custom_id exceeds Discord 100-char limit");
+	}
+	return customId;
+}
+
+export function createMediaPayload(
+	userId: string,
+	mediaType: "movie" | "tv",
+	queryDigest: string,
+): MediaComponentPayload {
+	return {
+		action: "media",
+		userId,
+		infoHash: "",
+		mediaType,
+		queryDigest,
+		expiry: Date.now() + EXPIRY_WINDOW_MS,
+	};
 }
 
 /** Create a payload that expires in 15 minutes. */

@@ -32,6 +32,18 @@ export interface ComponentData {
 	values?: string[];
 }
 
+export interface MessageComponent {
+	type: number;
+	value?: string;
+	options?: Array<{ value: string }>;
+	components?: MessageComponent[];
+}
+
+export interface InteractionMessage {
+	content?: string;
+	components?: MessageComponent[];
+}
+
 export interface DiscordInteraction {
 	id: string;
 	application_id: string;
@@ -41,6 +53,7 @@ export interface DiscordInteraction {
 	guild_id?: string;
 	member?: { user?: { id?: string } };
 	user?: { id?: string };
+	message?: InteractionMessage;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -77,6 +90,47 @@ function parseOption(value: unknown): CommandOption | null {
 		option.value = value.value;
 	}
 	return option;
+}
+
+function parseMessageComponent(value: unknown): MessageComponent | null {
+	if (!isRecord(value) || typeof value.type !== "number") {
+		return null;
+	}
+	const component: MessageComponent = { type: value.type };
+	if (value.value !== undefined) {
+		if (typeof value.value !== "string") {
+			return null;
+		}
+		component.value = value.value;
+	}
+	if (value.options !== undefined) {
+		if (!Array.isArray(value.options)) {
+			return null;
+		}
+		const options: Array<{ value: string }> = [];
+		for (const entry of value.options) {
+			if (!isRecord(entry) || typeof entry.value !== "string") {
+				return null;
+			}
+			options.push({ value: entry.value });
+		}
+		component.options = options;
+	}
+	if (value.components !== undefined) {
+		if (!Array.isArray(value.components)) {
+			return null;
+		}
+		const nested: MessageComponent[] = [];
+		for (const entry of value.components) {
+			const parsed = parseMessageComponent(entry);
+			if (!parsed) {
+				return null;
+			}
+			nested.push(parsed);
+		}
+		component.components = nested;
+	}
+	return component;
 }
 
 /**
@@ -123,6 +177,34 @@ export function parseInteraction(raw: unknown): DiscordInteraction | null {
 	if (isRecord(raw.user)) {
 		interaction.user =
 			typeof raw.user.id === "string" ? { id: raw.user.id } : undefined;
+	}
+
+	if (raw.message !== undefined) {
+		if (!isRecord(raw.message)) {
+			return null;
+		}
+		const message: InteractionMessage = {};
+		if (raw.message.content !== undefined) {
+			if (typeof raw.message.content !== "string") {
+				return null;
+			}
+			message.content = raw.message.content;
+		}
+		if (raw.message.components !== undefined) {
+			if (!Array.isArray(raw.message.components)) {
+				return null;
+			}
+			const components: MessageComponent[] = [];
+			for (const entry of raw.message.components) {
+				const component = parseMessageComponent(entry);
+				if (!component) {
+					return null;
+				}
+				components.push(component);
+			}
+			message.components = components;
+		}
+		interaction.message = message;
 	}
 
 	if (raw.data !== undefined) {

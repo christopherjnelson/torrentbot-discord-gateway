@@ -11,6 +11,9 @@ Discord (slash commands)
    ▼
 Cloudflare Worker ─────────────────────────────┐
    │                                           │
+   ├─► TMDB API (movie/TV disambiguation)      │
+   │    GET api.themoviedb.org/3/…             │
+   │                                           │
    ├─► Prowlarr API (search)                   │
    │    GET prowlarr.example.com/api/v1/search │
    │                                           │
@@ -23,9 +26,11 @@ Cloudflare Worker ────────────────────�
 n8n / automation ──► /api/* (Bearer auth) ──────┘
 ```
 
-Search goes directly to Prowlarr; torrent management goes directly to TorBox.
-The TorBox Voyager/Torznab endpoint (`search-api.torbox.app`) is **not** used
-and no Voyager API key is required.
+General search goes directly to Prowlarr. Movie and TV search uses TMDB only
+to choose a canonical title/year, then searches that text through Prowlarr.
+Torrent management goes directly to TorBox. The TorBox Voyager/Torznab
+endpoint (`search-api.torbox.app`) is **not** used and no Voyager API key is
+required.
 
 ## Quick Start
 
@@ -36,7 +41,7 @@ Get TorrentBot up and running in 6 steps:
 3. **Set Cloudflare secrets**: Configure production secrets using `npx wrangler secret put <NAME>` for keys like `DISCORD_PUBLIC_KEY`, `PROWLARR_API_KEY`, and others.
 4. **Deploy the Worker**: Run `npm run deploy` to publish the gateway to Cloudflare Workers.
 5. **Register commands**: Run `npm run discord:register` to publish the slash commands to your Discord guild.
-6. **Test in Discord**: Configure the Interactions Endpoint URL in your Discord Developer Portal, then run a search (e.g. `/search example`) to verify.
+6. **Test in Discord**: Configure the Interactions Endpoint URL in your Discord Developer Portal, then run a search (e.g. `/search general query:ubuntu`) to verify.
 
 ## Implemented commands and routes
 
@@ -44,7 +49,9 @@ Get TorrentBot up and running in 6 steps:
 
 | Command | Description | Who can use it |
 | --- | --- | --- |
-| `/search query:<text>` | Search Prowlarr, show the top 10 results (title, size, seeders, category/source, magnet/hash availability); results with valid info hashes include a select menu to start a download. Selectable results are checked against TorBox's cache in one batch request and cached ones are marked with `⚡ Cached` | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
+| `/search general query:<text>` | Search all configured Prowlarr indexers directly; TMDB is never called | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
+| `/search movie query:<title>` | Search TMDB movies, choose a canonical title/year or `Search exactly as entered`, then search releases through Prowlarr | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
+| `/search tv query:<title>` | Search TMDB TV series, choose a canonical name/first-air year or `Search exactly as entered`, then search releases through Prowlarr | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
 | `/add magnet:<uri>` | Submit a magnet URI to TorBox | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
 | `/status` | List the TorBox account's downloads (ephemeral); ready torrents include temporary download links | Members of guilds in `TORBOX_ALLOWED_GUILD_IDS` |
 
@@ -58,13 +65,29 @@ Get TorrentBot up and running in 6 steps:
 | `POST /api/torrents` | Internal add-magnet API (`{magnet}`), backed by TorBox |
 | `GET /api/torrents/:id` | Internal torrent status API, backed by TorBox |
 
-`/search` answers Discord within the 3-second deadline using a deferred
-response (type 5), then queries Prowlarr via `ctx.waitUntil` and edits the
-original response through the follow-up webhook
+All `/search` forms answer Discord within the 3-second deadline using an
+ephemeral deferred response (type 5 with flag 64), run bounded upstream work
+via `ctx.waitUntil`, and edit the original response through the follow-up webhook
 (`PATCH /webhooks/{application.id}/{interaction.token}/messages/@original`).
 `/add` and `/status` defer ephemerally and complete the same way.
 
-When `/search` returns results with valid info hashes, it also includes a
+`/search general` bypasses TMDB entirely. `/search movie` calls
+`GET /3/search/movie`; `/search tv` calls `GET /3/search/tv`. Media choices
+are shown in deterministic upstream order (up to 10), using canonical
+title/name and year. Selecting a media item re-fetches the corresponding
+`GET /3/movie/{id}` or `GET /3/tv/{id}` details record so client-provided
+title/year data is never trusted. Prowlarr receives `<canonical title> <year>`
+when a valid year exists, otherwise just the canonical title.
+
+Every media menu ends with **Search exactly as entered**. That selection
+bypasses the TMDB details lookup and sends the original validated query
+directly to Prowlarr. The exact query remains in the bot-authored heading with
+reversible escaping and is accepted only when it matches the signed query
+digest. Numeric TMDB IDs use hidden, integrity-checked option values; the
+compact custom ID contains no title or query and remains signed,
+requester-bound, expiring, and within Discord's 100-character limit.
+
+When Prowlarr returns results with valid info hashes, `/search` includes a
 Discord select menu component (placeholder: "Select a release to download").
 The original requester can use this menu to submit a selected result to
 TorBox without manually copying the magnet URI. Up to 10 distinct valid
@@ -192,6 +215,8 @@ shown only in the ephemeral response, never logged, and never persisted.
 - A Discord account and a Discord application (below)
 - A running Prowlarr instance reachable from Cloudflare (this deployment uses
   `https://prowlarr.example.com`) with its API key
+- A TMDB API read access token (only needed for `/search movie` and
+  `/search tv`)
 - A TorBox account with an API key (only needed for `/add` and `/status`)
 
 ### Discord application setup
@@ -235,6 +260,7 @@ Fill in `.dev.vars` (never commit it — it is git-ignored):
 | `DISCORD_BOT_TOKEN` | secret | Command registration script only |
 | `DISCORD_GUILD_ID` | id | Guild-scoped command registration |
 | `PROWLARR_API_KEY` | secret | Prowlarr search (`X-Api-Key` header) |
+| `TMDB_READ_ACCESS_TOKEN` | secret | TMDB movie/TV search and selected-record details (`Authorization: Bearer …`); general search does not use it |
 | `TORBOX_API_KEY` | secret | TorBox API (`/add`, `/status`, `/api/torrents`) |
 | `INTERNAL_API_TOKEN` | secret | Bearer token for `/api/*` (generate a long random string) |
 | `COMPONENT_SIGNING_SECRET` | secret | HMAC-SHA-256 signing for Discord component interactions (generate with `openssl rand -hex 32`) |
@@ -251,6 +277,7 @@ Secrets (values never appear in the repo or in logs):
 ```sh
 npx wrangler secret put DISCORD_PUBLIC_KEY
 npx wrangler secret put PROWLARR_API_KEY
+npx wrangler secret put TMDB_READ_ACCESS_TOKEN
 npx wrangler secret put TORBOX_API_KEY
 npx wrangler secret put INTERNAL_API_TOKEN
 npx wrangler secret put COMPONENT_SIGNING_SECRET
@@ -282,7 +309,10 @@ and can be edited there or in the Cloudflare dashboard.
 4. Run `npm run discord:register` to register slash commands in your Discord guild.
 5. Deploy the worker with `npm run deploy`.
 6. Enter the Interactions Endpoint URL in the Discord Developer Portal.
-7. First real search: run `/search example` in Discord and confirm the Worker returns results (verified via Prowlarr's History search log).
+7. First real searches: run `/search general query:ubuntu`,
+   `/search movie query:star wars`, and `/search tv query:breaking bad`.
+   Confirm that only movie/TV display a TMDB choice menu and all three reach
+   the normal Prowlarr release menu.
 
 ## Security Model
 
@@ -292,11 +322,14 @@ TorrentBot is designed with a strict zero-trust security architecture:
 - **Ephemeral Responses**: Sensitive actions, such as `/status` listings or generated TorBox download links, are delivered strictly as **ephemeral** Discord responses, meaning they are only visible to the initiating user.
 - **API-Key Secrecy**: 
   - **Prowlarr API**: Authenticated via the `X-Api-Key` header, never exposed in URLs or logs.
+  - **TMDB API**: Authenticated with `TMDB_READ_ACCESS_TOKEN` in the
+    `Authorization: Bearer` header. The token is never placed in a query
+    parameter, component, error, or log.
   - **TorBox API**: Authenticated via a bearer token. The documented permalink structure that embeds API keys in download links is strictly avoided.
   - **Internal API**: Routes require authentication via `Authorization: Bearer <INTERNAL_API_TOKEN>`, verified using constant-time comparison (SHA-256 pre-hashed).
 - **Proxy-URL Defense**: Prowlarr-returned proxy download/magnet URLs that embed API keys are never propagated, logged, or exposed. Instead, magnets are parsed and reconstructed cleanly from info hashes.
 - **HTTPS-Only Downloads**: Only `https:` URLs returned by TorBox are accepted for temporary download and zip archive links.
-- **No-Logging Rules**: Sensitive parameters (interaction tokens, API keys, full magnet URIs, temporary download URLs, and raw payloads) are never logged. Upstream errors are wrapped so they never leak endpoint URLs or credentials.
+- **No-Logging Rules**: Sensitive parameters (interaction tokens, API keys, full magnet URIs, temporary download URLs, raw search queries, selected TMDB titles, and upstream payloads) are never logged. Upstream errors are wrapped so they never leak endpoint URLs or credentials.
 - **Signed Component Payloads**: Interactive select menus from `/search` are signed using HMAC-SHA-256 with `COMPONENT_SIGNING_SECRET`. The signature binds the payload to the original requester, preventing tampering and preventing other members in the guild from selecting someone else's search option. Component payloads expire after 15 minutes.
 - **Safe Mentions**: All bot messages disable mention parsing (`allowed_mentions: { parse: [] }`) to prevent mention abuse or accidental notifications.
 
@@ -317,9 +350,12 @@ All development and verification scripts are managed via npm:
 
 ### Testing details
 
-`npm test` runs Vitest inside a real Worker runtime (`@cloudflare/vitest-pool-workers`). Outbound HTTP requests are fully mocked via `fetchMock`, ensuring tests never call Discord, Prowlarr, or TorBox APIs directly. Signed Discord request payloads are produced deterministically using a generated Ed25519 key pair, preserving complete signature verification in test assertions.
+`npm test` runs Vitest inside a real Worker runtime (`@cloudflare/vitest-pool-workers`). Outbound HTTP requests are fully mocked via `fetchMock`, ensuring tests never call Discord, TMDB, Prowlarr, or TorBox APIs directly. Signed Discord request payloads are produced deterministically using a generated Ed25519 key pair, preserving complete signature verification in test assertions.
 
-The 245 tests cover health checks, signature validation, command routing, deferred responses, upstream Prowlarr/TorBox API error/timeout scenarios, credential safety, and internal API endpoints.
+The test suite covers health checks, signature validation, typed command
+routing, TMDB normalization/disambiguation, deferred responses, upstream
+Prowlarr/TMDB/TorBox error and timeout scenarios, credential safety, and
+internal API endpoints.
 
 ## For Developers
 
@@ -331,23 +367,28 @@ src/
   config.ts           env binding accessors (graceful degradation)
   discord/            types, Ed25519 verify, responses, follow-up client, router
   commands/           search, add, status, component (select menu handler), shared error mapping
-  services/           prowlarr (search JSON API), torbox (JSON API)
+  services/           prowlarr, TMDB, and torbox typed API boundaries
   routes/             discord webhook, internal API
   utils/              format, http (timeouts), errors, auth, magnet, signing (HMAC)
-  types/              search, torbox models
+  types/              search, media, and torbox models
 test/                 vitest + @cloudflare/vitest-pool-workers
 scripts/              register-commands.mjs
 ```
 
 ### External API assumptions
 
-Development assumes verified behaviors for Discord (Ed25519 interactions, deferring, ephemeral responses, component interactions), Prowlarr (search endpoint parameter shapes and category mapping), and TorBox (add, mylist list caching, download URL request shapes, and cache-check endpoints). For detailed documentation of these assumptions, external contracts, and API structures, refer to the **Agent Skills** in `.agents/skills/`.
+Development assumes verified behaviors for Discord (Ed25519 interactions,
+ephemeral deferring, component interactions), Prowlarr (search endpoint
+parameter shapes and category mapping), TMDB (movie/TV search and details),
+and TorBox (add, mylist caching, download links, and cache checks). For the
+exact contracts, refer to the **Agent Skills** in `.agents/skills/`.
 
 ### Agent skills
 
 Before modifying the integrations, consult the tracked agent skills:
 - **TorBox API**: Read [`.agents/skills/torbox-api/SKILL.md`](.agents/skills/torbox-api/SKILL.md) for contracts, completion rules, cache-check details, and credentials safety.
 - **Prowlarr API**: Read [`.agents/skills/prowlarr-api/SKILL.md`](.agents/skills/prowlarr-api/SKILL.md) for search normalization, proxy-URL security, and cache-enrichment details.
+- **TMDB API**: Read [`.agents/skills/tmdb-api/SKILL.md`](.agents/skills/tmdb-api/SKILL.md) before changing movie/TV endpoints, normalization, component continuation, or token handling.
 
 Always update these skills in the same change when verified API behaviors change.
 
@@ -384,6 +425,14 @@ responses never include download URLs, file lists, or server paths.
   and check `DISCORD_APPLICATION_ID`, `DISCORD_GUILD_ID`, `DISCORD_BOT_TOKEN`.
 - **"Search is not configured"**: set `PROWLARR_URL` (var) and
   `PROWLARR_API_KEY` (secret).
+- **"Movie and TV lookup is not configured"**: set
+  `TMDB_READ_ACCESS_TOKEN` as a Worker secret and ensure
+  `COMPONENT_SIGNING_SECRET` is configured. Local development may add
+  `TMDB_READ_ACCESS_TOKEN=<local secret>` to the ignored `.dev.vars` file.
+- **"The media lookup service is unavailable"**: TMDB timed out, rate
+  limited the request, rejected the configured credential, or returned an
+  unexpected response. The failure is isolated; retry later or use
+  `/search general` to bypass TMDB.
 - **"The upstream service rejected the configured credentials"**: the
   `PROWLARR_API_KEY` is wrong or was rotated; copy the current key from
   Prowlarr → Settings → General → Security → API Key.

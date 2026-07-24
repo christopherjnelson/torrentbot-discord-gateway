@@ -7,7 +7,7 @@
  */
 
 /** Which upstream service failed. */
-export type UpstreamService = "prowlarr" | "torbox" | "discord";
+export type UpstreamService = "prowlarr" | "torbox" | "tmdb" | "discord";
 
 /** The upstream service did not respond within the configured timeout. */
 export class UpstreamTimeoutError extends Error {
