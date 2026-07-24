@@ -21,7 +21,6 @@
 	// `npx wrangler secret put TORBOX_ALLOWED_GUILD_IDS` (comma-separated).
 	"vars": {
 		"UPSTREAM_TIMEOUT_MS": "10000",
-		"PROWLARR_URL": "https://prowlarr.example.com",
 		"TORBOX_POLL_INTERVAL_MS": "2500",
 		"TORBOX_POLL_MAX_ATTEMPTS": "7"
 	},
@@ -37,6 +36,7 @@
 		"required": [
 			"DISCORD_PUBLIC_KEY",
 			"PROWLARR_API_KEY",
+			"PROWLARR_URL",
 			"TMDB_READ_ACCESS_TOKEN",
 			"TORBOX_API_KEY",
 			"INTERNAL_API_TOKEN",
