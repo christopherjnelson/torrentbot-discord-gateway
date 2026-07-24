@@ -12,11 +12,13 @@ export const INTERACTION_APPLICATION_COMMAND = 2;
 export const INTERACTION_MESSAGE_COMPONENT = 3;
 
 export const APPLICATION_COMMAND_OPTION_STRING = 3;
+export const APPLICATION_COMMAND_OPTION_SUBCOMMAND = 1;
 
 export interface CommandOption {
 	name: string;
 	type: number;
 	value?: string | number | boolean;
+	options?: CommandOption[];
 }
 
 export interface ApplicationCommandData {
@@ -53,6 +55,20 @@ function parseOption(value: unknown): CommandOption | null {
 		return null;
 	}
 	const option: CommandOption = { name: value.name, type: value.type };
+	if (value.options !== undefined) {
+		if (!Array.isArray(value.options)) {
+			return null;
+		}
+		const options: CommandOption[] = [];
+		for (const nested of value.options) {
+			const parsed = parseOption(nested);
+			if (!parsed) {
+				return null;
+			}
+			options.push(parsed);
+		}
+		option.options = options;
+	}
 	if (
 		typeof value.value === "string" ||
 		typeof value.value === "number" ||
@@ -129,9 +145,15 @@ export function parseInteraction(raw: unknown): DiscordInteraction | null {
 				if (!Array.isArray(raw.data.options)) {
 					return null;
 				}
-				data.options = raw.data.options
-					.map(parseOption)
-					.filter((option): option is CommandOption => option !== null);
+				const options: CommandOption[] = [];
+				for (const rawOption of raw.data.options) {
+					const option = parseOption(rawOption);
+					if (!option) {
+						return null;
+					}
+					options.push(option);
+				}
+				data.options = options;
 			}
 			interaction.data = data;
 		}

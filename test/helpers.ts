@@ -91,8 +91,20 @@ export function makeCommandInteraction(
 	options?: CommandOption[],
 	overrides: Partial<DiscordInteraction> = {},
 ): DiscordInteraction {
+	const normalizedOptions =
+		commandName === "search" &&
+		options?.length === 1 &&
+		options[0]?.name === "query"
+			? [
+					{
+						name: "general",
+						type: 1,
+						options,
+					},
+				]
+			: options;
 	return makeInteraction({
-		data: { name: commandName, options },
+		data: { name: commandName, options: normalizedOptions },
 		...overrides,
 	});
 }

@@ -5,8 +5,10 @@ import {
 	messageResponse,
 } from "../discord/responses";
 import {
-	getStringOption,
 	getInvokerId,
+	APPLICATION_COMMAND_OPTION_STRING,
+	APPLICATION_COMMAND_OPTION_SUBCOMMAND,
+	type ApplicationCommandData,
 	type DiscordInteraction,
 } from "../discord/types";
 import { searchProwlarr } from "../services/prowlarr";
@@ -38,24 +40,58 @@ export const MAX_SEARCH_RESULTS = 10;
  * fill the cap. The Prowlarr service clamps this to 1–100.
  */
 const PROWLARR_REQUEST_LIMIT = 25;
-const MAX_QUERY_LENGTH = 200;
+export const MAX_QUERY_LENGTH = 200;
 /** Discord select-option description hard limit. */
 const DESCRIPTION_LIMIT = 100;
 /** Cache badge appended to a cached result's option description. */
 const CACHE_BADGE = "⚡ Cached";
 
 /**
- * Validate the required `query` option. Returns null when missing, empty,
- * or over the length cap.
+ * Strictly parse Discord's nested `/search <subcommand> query:<text>` shape.
+ * Missing, unknown, malformed, duplicated, and legacy flat options all fail.
  */
-export function extractSearchQuery(
+export type SearchKind = "general" | "movie" | "tv";
+
+export interface SearchRoute {
+	kind: SearchKind;
+	query: string;
+}
+
+export function extractSearchRoute(
 	interaction: DiscordInteraction,
-): string | null {
-	const raw = getStringOption(interaction, "query")?.trim();
+): SearchRoute | null {
+	const data = interaction.data as ApplicationCommandData | undefined;
+	if (!data?.options || data.options.length !== 1) {
+		return null;
+	}
+	const subcommand = data.options[0];
+	if (
+		subcommand.type !== APPLICATION_COMMAND_OPTION_SUBCOMMAND ||
+		subcommand.value !== undefined ||
+		!isSearchKind(subcommand.name) ||
+		!subcommand.options ||
+		subcommand.options.length !== 1
+	) {
+		return null;
+	}
+	const queryOption = subcommand.options[0];
+	if (
+		queryOption.name !== "query" ||
+		queryOption.type !== APPLICATION_COMMAND_OPTION_STRING ||
+		typeof queryOption.value !== "string" ||
+		queryOption.options !== undefined
+	) {
+		return null;
+	}
+	const raw = queryOption.value.trim();
 	if (!raw || raw.length > MAX_QUERY_LENGTH) {
 		return null;
 	}
-	return raw;
+	return { kind: subcommand.name, query: raw };
+}
+
+function isSearchKind(value: string): value is SearchKind {
+	return value === "general" || value === "movie" || value === "tv";
 }
 
 /**
@@ -219,7 +255,8 @@ async function completeSearch(
 }
 
 /**
- * Handle `/search query:<string>`. Defers immediately (Discord's initial
+ * Handle `/search <general|movie|tv> query:<string>`. General defers
+ * immediately (Discord's initial
  * response deadline is 3 seconds) and completes the search in the
  * background, editing the original response with the results.
  */
@@ -228,10 +265,10 @@ export function handleSearchCommand(
 	config: AppConfig,
 	ctx: ExecutionContext,
 ): Response {
-	const query = extractSearchQuery(interaction);
-	if (query === null) {
+	const route = extractSearchRoute(interaction);
+	if (route === null) {
 		return messageResponse(
-			"Missing or invalid `query` option. Usage: `/search query:<text>` (1-200 characters).",
+			"Invalid search options. Usage: `/search general|movie|tv query:<text>` (1-200 characters).",
 			true,
 		);
 	}
@@ -244,6 +281,13 @@ export function handleSearchCommand(
 		return messageResponse(guildAuthMessage(authStatus), true);
 	}
 
+	if (route.kind !== "general") {
+		return messageResponse(
+			"Movie and TV media lookup is not available yet. Please use `/search general` for now.",
+			true,
+		);
+	}
+
 	if (!config.prowlarrUrl || !config.prowlarrApiKey) {
 		return messageResponse(
 			"Search is not configured on this bot. The owner needs to set the Prowlarr URL and API key.",
@@ -251,6 +295,6 @@ export function handleSearchCommand(
 		);
 	}
 
-	ctx.waitUntil(completeSearch(interaction, query, config));
+	ctx.waitUntil(completeSearch(interaction, route.query, config));
 	return deferredMessageResponse();
 }

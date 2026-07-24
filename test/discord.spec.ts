@@ -185,6 +185,23 @@ describe("guild_id parsing", () => {
 });
 
 describe("/search command", () => {
+	it("rejects the legacy flat query shape", async () => {
+		const { response } = await dispatchInteraction(
+			JSON.stringify(
+				makeInteraction({
+					data: {
+						name: "search",
+						options: [
+							{ name: "query", type: 3, value: "blade runner" },
+						],
+					},
+				}),
+			),
+		);
+		const body = (await response.json()) as { data: { content: string } };
+		expect(body.data.content).toContain("Invalid search options");
+	});
+
 	it("rejects a missing query option without contacting upstreams", async () => {
 		const { response } = await dispatchInteraction(
 			JSON.stringify(makeCommandInteraction("search")),
@@ -199,6 +216,77 @@ describe("/search command", () => {
 		expect(body.data.content).toContain("query");
 	});
 
+	it.each([
+		{
+			label: "unknown subcommand",
+			options: [
+				{
+					name: "unknown",
+					type: 1,
+					options: [{ name: "query", type: 3, value: "blade runner" }],
+				},
+			],
+		},
+		{
+			label: "missing nested query",
+			options: [{ name: "general", type: 1, options: [] }],
+		},
+		{
+			label: "blank query",
+			options: [
+				{
+					name: "general",
+					type: 1,
+					options: [{ name: "query", type: 3, value: "   " }],
+				},
+			],
+		},
+		{
+			label: "duplicated subcommands",
+			options: [
+				{
+					name: "general",
+					type: 1,
+					options: [{ name: "query", type: 3, value: "one" }],
+				},
+				{
+					name: "movie",
+					type: 1,
+					options: [{ name: "query", type: 3, value: "two" }],
+				},
+			],
+		},
+		{
+			label: "duplicated query options",
+			options: [
+				{
+					name: "general",
+					type: 1,
+					options: [
+						{ name: "query", type: 3, value: "one" },
+						{ name: "query", type: 3, value: "two" },
+					],
+				},
+			],
+		},
+		{
+			label: "wrong nested option type",
+			options: [
+				{
+					name: "general",
+					type: 1,
+					options: [{ name: "query", type: 4, value: "blade runner" }],
+				},
+			],
+		},
+	])("rejects $label", async ({ options }) => {
+		const { response } = await dispatchInteraction(
+			JSON.stringify(makeCommandInteraction("search", options)),
+		);
+		const body = (await response.json()) as { data: { content: string } };
+		expect(body.data.content).toContain("Invalid search options");
+	});
+
 	it("rejects an over-length query", async () => {
 		const { response } = await dispatchInteraction(
 			JSON.stringify(
@@ -210,6 +298,30 @@ describe("/search command", () => {
 		const body = (await response.json()) as { data: { content: string } };
 		expect(body.data.content).toContain("1-200 characters");
 	});
+
+	it.each(["movie", "tv"])(
+		"routes %s safely without contacting upstreams in the typed-only phase",
+		async (kind) => {
+			const { response } = await dispatchInteraction(
+				JSON.stringify(
+					makeCommandInteraction("search", [
+						{
+							name: kind,
+							type: 1,
+							options: [
+								{ name: "query", type: 3, value: "blade runner" },
+							],
+						},
+					]),
+				),
+			);
+			const body = (await response.json()) as {
+				data: { flags?: number; content: string };
+			};
+			expect(body.data.flags).toBe(64);
+			expect(body.data.content).toContain("not available yet");
+		},
+	);
 
 	it("responds ephemerally when no Prowlarr API key is configured", async () => {
 		const { response } = await dispatchInteraction(

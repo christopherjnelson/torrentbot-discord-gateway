@@ -11,6 +11,8 @@
  * touched. Safe to run repeatedly (bulk-overwrite semantics).
  */
 
+import { commands } from "./command-schema.mjs";
+
 const {
 	DISCORD_APPLICATION_ID,
 	DISCORD_GUILD_ID,
@@ -32,41 +34,6 @@ if (missingVariables.length > 0) {
 	);
 	process.exit(1);
 }
-
-const commands = [
-	{
-		name: "search",
-		description: "Search Prowlarr for torrents",
-		type: 1,
-		options: [
-			{
-				name: "query",
-				description: "What to search for",
-				type: 3,
-				required: true,
-			},
-		],
-	},
-	{
-		name: "add",
-		description: "Add a magnet URI to TorBox (authorized users only)",
-		type: 1,
-		options: [
-			{
-				name: "magnet",
-				description: "The magnet URI to download",
-				type: 3,
-				required: true,
-			},
-		],
-	},
-	{
-		name: "status",
-		description: "Show TorBox download status (authorized users only)",
-		type: 1,
-		options: [],
-	},
-];
 
 const unregister = process.argv.includes("--unregister");
 const payload = unregister ? [] : commands;
