@@ -31,6 +31,7 @@ export function testEnv(overrides: Record<string, string> = {}): Env {
 		TMDB_READ_ACCESS_TOKEN: "test-tmdb-read-token",
 		TORBOX_API_KEY: "test-torbox-key",
 		INTERNAL_API_TOKEN: "test-internal-token",
+		COMPONENT_SIGNING_SECRET: "test-signing-secret-32-bytes-long!",
 		TORBOX_ALLOWED_GUILD_IDS: TEST_GUILD_ID,
 		UPSTREAM_TIMEOUT_MS: "10000",
 		...overrides,
@@ -128,6 +129,12 @@ export interface PatchedMessage {
 	path: string;
 	body: {
 		content?: string;
+		embeds?: Array<{
+			title?: string;
+			description?: string;
+			thumbnail?: { url?: string };
+			footer?: { text?: string };
+		}>;
 		components?: object[];
 		flags?: number;
 		allowed_mentions?: { parse?: string[] };

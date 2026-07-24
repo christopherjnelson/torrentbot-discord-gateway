@@ -6,7 +6,9 @@ import type { TvDetails, TvSeasonSummary } from "../types/media";
 import { sanitizeInline } from "../utils/format";
 import {
 	buildSeasonCustomId,
+	buildWorkflowCustomId,
 	createSeasonPayload,
+	createWorkflowPayload,
 	digestComponentQuery,
 	DISCORD_ID_LIMIT,
 	MAX_SELECT_OPTIONS,
@@ -142,6 +144,20 @@ function queryFromSeasonHeading(content: string | undefined): string | null {
 	);
 }
 
+function queryFromSeasonInteraction(
+	interaction: DiscordInteraction,
+): string | null {
+	const legacy = queryFromSeasonHeading(interaction.message?.content);
+	if (legacy !== null) {
+		return legacy;
+	}
+	const footer = interaction.message?.embeds?.[0]?.footer?.text;
+	const prefix = "Original search: ";
+	return footer?.startsWith(prefix)
+		? unescapeHeadingQuery(footer.slice(prefix.length))
+		: null;
+}
+
 function formatSeasonCode(seasonNumber: number): string {
 	return `S${String(seasonNumber).padStart(2, "0")}`;
 }
@@ -207,19 +223,6 @@ export async function buildSeasonComponents(
 		description: string;
 	}> = [];
 
-	if (payload.page === 0) {
-		options.push({
-			label: "Complete series",
-			value: await buildOptionValue(
-				"complete",
-				0,
-				payload,
-				signingSecret,
-			),
-			description: "All seasons",
-		});
-	}
-
 	for (const season of seasons) {
 		options.push({
 			label:
@@ -239,37 +242,6 @@ export async function buildSeasonComponents(
 		});
 	}
 
-	if (payload.page > 0) {
-		options.push({
-			label: "Previous seasons",
-			value: await buildOptionValue(
-				"page",
-				payload.page - 1,
-				payload,
-				signingSecret,
-			),
-			description: `Show page ${payload.page} of ${pageCount}`,
-		});
-	}
-	if (payload.page + 1 < pageCount) {
-		options.push({
-			label: "Next seasons",
-			value: await buildOptionValue(
-				"page",
-				payload.page + 1,
-				payload,
-				signingSecret,
-			),
-			description: `Show page ${payload.page + 2} of ${pageCount}`,
-		});
-	}
-
-	options.push({
-		label: "Search exactly as entered",
-		value: await buildOptionValue("exact", 0, payload, signingSecret),
-		description: "Bypass season selection",
-	});
-
 	if (options.length > MAX_SELECT_OPTIONS) {
 		throw new Error("too many season select options");
 	}
@@ -286,8 +258,85 @@ export async function buildSeasonComponents(
 	}
 
 	const customId = await buildSeasonCustomId(payload, signingSecret);
-	return [
+	const workflowId = async (
+		action:
+			| "tv-complete"
+			| "tv-specials"
+			| "exact"
+			| "back-results"
+			| "cancel"
+			| "previous"
+			| "next",
+		page = payload.page,
+	) =>
+		buildWorkflowCustomId(
+			createWorkflowPayload({
+				userId: payload.userId,
+				action,
+				mediaType: "tv",
+				mediaId: details.id,
+				page,
+				queryDigest: payload.queryDigest,
+				expiry: payload.expiry,
+			}),
+			signingSecret,
+		);
+	const primaryButtons: object[] = [
 		{
+			type: 2,
+			style: 1,
+			label: "Complete Series",
+			custom_id: await workflowId("tv-complete"),
+		},
+	];
+	if (details.seasons.some((season) => season.seasonNumber === 0)) {
+		primaryButtons.push({
+			type: 2,
+			style: 2,
+			label: "Specials",
+			custom_id: await workflowId("tv-specials"),
+		});
+	}
+	primaryButtons.push({
+		type: 2,
+		style: 2,
+		label: "Search Exactly as Entered",
+		custom_id: await workflowId("exact"),
+	});
+	const navigationButtons: object[] = [];
+	if (payload.page > 0) {
+		navigationButtons.push({
+			type: 2,
+			style: 2,
+			label: "Previous",
+			custom_id: await workflowId("previous", payload.page - 1),
+		});
+	}
+	if (payload.page + 1 < pageCount) {
+		navigationButtons.push({
+			type: 2,
+			style: 2,
+			label: "Next",
+			custom_id: await workflowId("next", payload.page + 1),
+		});
+	}
+	navigationButtons.push(
+		{
+			type: 2,
+			style: 2,
+			label: "Back",
+			custom_id: await workflowId("back-results"),
+		},
+		{
+			type: 2,
+			style: 4,
+			label: "Cancel",
+			custom_id: await workflowId("cancel"),
+		},
+	);
+	const rows: object[] = [];
+	if (options.length > 0) {
+		rows.push({
 			type: 1,
 			components: [
 				{
@@ -297,8 +346,13 @@ export async function buildSeasonComponents(
 					options,
 				},
 			],
-		},
-	];
+		});
+	}
+	rows.push(
+		{ type: 1, components: primaryButtons },
+		{ type: 1, components: navigationButtons },
+	);
+	return rows;
 }
 
 export async function extractSeasonSelection(
@@ -340,7 +394,7 @@ export async function extractSeasonSelection(
 		return null;
 	}
 
-	const query = queryFromSeasonHeading(interaction.message?.content);
+	const query = queryFromSeasonInteraction(interaction);
 	if (
 		query === null ||
 		query.length === 0 ||

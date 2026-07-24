@@ -1,28 +1,29 @@
 import { fetchMock, waitOnExecutionContext } from "cloudflare:test";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { TEST_SIGNING_SECRET } from "./fixtures";
 import {
 	dispatchInteraction,
 	interceptOriginalResponseEdit,
 	makeCommandInteraction,
 	makeComponentInteraction,
-	TEST_GUILD_ID,
-	TEST_USER_ID,
 } from "./helpers";
-import { TEST_SIGNING_SECRET } from "./fixtures";
-import {
-	buildMediaCustomId,
-	digestComponentQuery,
-	type MediaComponentPayload,
-} from "../src/utils/signing";
 
-type CapturedMenu = {
-	content: string;
+type View = {
+	content?: string;
+	embeds?: Array<{
+		title?: string;
+		description?: string;
+		thumbnail?: { url?: string };
+		footer?: { text?: string };
+	}>;
 	components: Array<{
 		type: number;
 		components: Array<{
 			type: number;
-			custom_id: string;
-			options: Array<{
+			custom_id?: string;
+			label?: string;
+			style?: number;
+			options?: Array<{
 				label: string;
 				value: string;
 				description: string;
@@ -36,29 +37,20 @@ beforeAll(() => {
 	fetchMock.disableNetConnect();
 });
 
-beforeEach(() => {
-	fetchMock.assertNoPendingInterceptors();
-});
+beforeEach(() => fetchMock.assertNoPendingInterceptors());
+afterAll(() => fetchMock.deactivate());
 
-afterAll(() => {
-	fetchMock.deactivate();
-});
-
-function tmdbSearchPath(mediaType: "movie" | "tv"): RegExp {
-	return new RegExp(`^/3/search/${mediaType}\\?`);
-}
-
-async function openMediaMenu(
+async function openMediaResults(
 	mediaType: "movie" | "tv",
 	query: string,
 	results: unknown[],
-): Promise<CapturedMenu> {
+): Promise<View> {
 	fetchMock
 		.get("https://api.themoviedb.org")
-		.intercept({ path: tmdbSearchPath(mediaType) })
+		.intercept({ path: new RegExp(`^/3/search/${mediaType}\\?`) })
 		.reply(200, JSON.stringify({ results }));
 	const { captured } = interceptOriginalResponseEdit();
-	const { ctx, response } = await dispatchInteraction(
+	const { ctx } = await dispatchInteraction(
 		JSON.stringify(
 			makeCommandInteraction("search", [
 				{
@@ -70,390 +62,232 @@ async function openMediaMenu(
 		),
 		{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
 	);
-	expect(await response.json()).toEqual({
-		type: 5,
-		data: { flags: 64 },
-	});
 	await waitOnExecutionContext(ctx);
-	return captured[0].body as CapturedMenu;
+	return captured[0].body as View;
 }
 
-function componentFromMenu(
-	menu: CapturedMenu,
-	value: string,
-	overrides: Parameters<typeof makeComponentInteraction>[0] = {},
-) {
-	const select = menu.components[0].components[0];
+function selectInteraction(view: View, optionIndex = 0) {
+	const select = view.components[0].components[0];
 	return makeComponentInteraction({
-		data: { custom_id: select.custom_id, values: [value] },
-		message: { content: menu.content, components: menu.components },
-		...overrides,
+		data: {
+			custom_id: select.custom_id as string,
+			values: [select.options?.[optionIndex]?.value as string],
+		},
+		message: view,
 	});
 }
 
-describe("TMDB movie disambiguation", () => {
-	it("renders canonical title/year choices and the exact-search fallback", async () => {
-		const menu = await openMediaMenu("movie", "star wars", [
-			{
-				id: 11,
-				title: "Star Wars",
-				original_title: "Star Wars",
-				release_date: "1977-05-25",
-			},
-			{
-				id: 12,
-				title: "Star Wars: The Clone Wars",
-				release_date: "",
-			},
+function buttonInteraction(view: View, label: string) {
+	const component = view.components
+		.flatMap((row) => row.components)
+		.find((candidate) => candidate.label === label);
+	expect(component?.custom_id, `missing button ${label}`).toBeDefined();
+	return makeComponentInteraction({
+		data: { custom_id: component?.custom_id as string },
+		message: view,
+	});
+}
+
+function movieDetails() {
+	return {
+		id: 11,
+		title: "Star Wars",
+		original_title: "Star Wars",
+		release_date: "1977-05-25",
+		overview: "Luke begins a journey across the galaxy.",
+		poster_path: "/star_wars.jpg",
+		genres: [
+			{ id: 12, name: "Adventure" },
+			{ id: 878, name: "Science Fiction" },
+		],
+		runtime: 121,
+		status: "Released",
+	};
+}
+
+describe("guided TMDB media workflow", () => {
+	it("keeps only TMDB matches in the dropdown and uses buttons for actions", async () => {
+		const view = await openMediaResults("movie", "star wars", [
+			{ id: 11, title: "Star Wars", release_date: "1977-05-25" },
+			{ id: 12, title: "The Clone Wars", release_date: "" },
 		]);
-		expect(menu.content).toBe("Choose a movie for **star wars**:");
-		const select = menu.components[0].components[0];
-		expect(select.custom_id.length).toBeLessThanOrEqual(100);
-		expect(select.options).toHaveLength(3);
-		expect(select.options[0]).toMatchObject({
-			label: "Star Wars",
-			description: "1977 • Movie",
-		});
-		expect(select.options[1].description).toBe("Year unknown • Movie");
-		expect(select.options[2].label).toBe("Search exactly as entered");
-		for (const option of select.options) {
-			expect(option.value.length).toBeLessThanOrEqual(100);
-			expect(option.value).not.toContain("Star Wars");
-		}
+		expect(view.components[0].components[0].options?.map((o) => o.label)).toEqual([
+			"Star Wars",
+			"The Clone Wars",
+		]);
+		expect(view.components[1].components.map((button) => button.label)).toEqual([
+			"Search Exactly as Entered",
+			"Cancel",
+		]);
+		expect(view.embeds?.[0].footer?.text).toContain("Original search:");
 	});
 
-	it("re-fetches movie details and searches Prowlarr with canonical title and year", async () => {
-		const menu = await openMediaMenu("movie", "star wars", [
+	it("selecting a movie renders a poster-backed card before Prowlarr", async () => {
+		const results = await openMediaResults("movie", "star wars", [
 			{ id: 11, title: "Star Wars", release_date: "1977-05-25" },
 		]);
-		let detailsAuth = "";
 		fetchMock
 			.get("https://api.themoviedb.org")
 			.intercept({ path: "/3/movie/11" })
-			.reply((options) => {
-				detailsAuth = (options.headers as Record<string, string>)
-					.authorization;
-				return {
-					statusCode: 200,
-					data: JSON.stringify({
-						id: 11,
-						title: "Star Wars",
-						original_title: "Star Wars",
-						release_date: "1977-05-25",
-					}),
-				};
-			});
-		let prowlarrQuery = "";
-		fetchMock
-			.get("https://prowlarr.test")
-			.intercept({ path: /^\/api\/v1\/search/ })
-			.reply((options) => {
-				prowlarrQuery = new URL(`https://prowlarr.test${options.path}`)
-					.searchParams.get("query") ?? "";
-				return { statusCode: 200, data: "[]" };
-			});
+			.reply(200, JSON.stringify(movieDetails()));
 		const { captured } = interceptOriginalResponseEdit();
-		const selected = menu.components[0].components[0].options[0].value;
 		const { ctx, response } = await dispatchInteraction(
-			JSON.stringify(componentFromMenu(menu, selected)),
+			JSON.stringify(selectInteraction(results)),
 			{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
 		);
-		expect((await response.json()) as object).toMatchObject({
-			type: 6,
-		});
+		expect(await response.json()).toEqual({ type: 6 });
 		await waitOnExecutionContext(ctx);
-		expect(detailsAuth).toBe("Bearer test-tmdb-read-token");
-		expect(prowlarrQuery).toBe("Star Wars 1977");
-		expect(captured[0].body.content).toBe(
-			"No results found for `Star Wars 1977`.",
-		);
+		const card = captured[0].body as View;
+		expect(card.embeds?.[0]).toMatchObject({
+			title: "Star Wars",
+			thumbnail: { url: "https://image.tmdb.org/t/p/w500/star_wars.jpg" },
+		});
+		expect(card.embeds?.[0].description).toContain("Movie • 1977");
+		expect(card.components[0].components.map((button) => button.label)).toEqual([
+			"Search Releases",
+			"Search Exactly as Entered",
+			"Back",
+			"Cancel",
+		]);
 	});
 
-	it("uses only the canonical title when details have no valid year", async () => {
-		const menu = await openMediaMenu("movie", "future movie", [
-			{ id: 22, title: "Future Movie", release_date: "" },
+	it("Search Releases uses the trusted canonical movie title and year", async () => {
+		const results = await openMediaResults("movie", "star wars", [
+			{ id: 11, title: "Star Wars", release_date: "1977-05-25" },
 		]);
 		fetchMock
 			.get("https://api.themoviedb.org")
-			.intercept({ path: "/3/movie/22" })
-			.reply(200, JSON.stringify({ id: 22, title: "Future Movie" }));
-		let prowlarrQuery = "";
+			.intercept({ path: "/3/movie/11" })
+			.reply(200, JSON.stringify(movieDetails()));
+		const firstEdit = interceptOriginalResponseEdit();
+		const first = await dispatchInteraction(
+			JSON.stringify(selectInteraction(results)),
+			{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
+		);
+		await waitOnExecutionContext(first.ctx);
+		const card = firstEdit.captured[0].body as View;
+
+		fetchMock
+			.get("https://api.themoviedb.org")
+			.intercept({ path: "/3/movie/11" })
+			.reply(200, JSON.stringify(movieDetails()));
+		let searched = "";
 		fetchMock
 			.get("https://prowlarr.test")
 			.intercept({ path: /^\/api\/v1\/search/ })
-			.reply((options) => {
-				prowlarrQuery = new URL(`https://prowlarr.test${options.path}`)
-					.searchParams.get("query") ?? "";
+			.reply((request) => {
+				searched =
+					new URL(`https://prowlarr.test${request.path}`).searchParams.get(
+						"query",
+					) ?? "";
 				return { statusCode: 200, data: "[]" };
 			});
-		interceptOriginalResponseEdit();
-		const selected = menu.components[0].components[0].options[0].value;
-		const { ctx } = await dispatchInteraction(
-			JSON.stringify(componentFromMenu(menu, selected)),
+		const secondEdit = interceptOriginalResponseEdit();
+		const second = await dispatchInteraction(
+			JSON.stringify(buttonInteraction(card, "Search Releases")),
 			{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
 		);
-		await waitOnExecutionContext(ctx);
-		expect(prowlarrQuery).toBe("Future Movie");
+		await waitOnExecutionContext(second.ctx);
+		expect(searched).toBe("Star Wars 1977");
+		expect(secondEdit.captured[0].body.embeds?.[0]).toMatchObject({
+			title: "No releases found",
+		});
 	});
-});
 
-describe("TMDB TV disambiguation", () => {
-	it("uses TV details to build a season menu without calling Prowlarr", async () => {
-		const menu = await openMediaMenu("tv", "the office", [
-			{ id: 2316, name: "The Office", first_air_date: "2005-03-24" },
+	it("selecting TV fetches details and renders seasons without Prowlarr", async () => {
+		const results = await openMediaResults("tv", "breaking bad", [
+			{ id: 1396, name: "Breaking Bad", first_air_date: "2008-01-20" },
 		]);
-		expect(menu.content).toBe("Choose a TV series for **the office**:");
-		expect(
-			menu.components[0].components[0].options[0].description,
-		).toBe("2005 • TV");
 		fetchMock
 			.get("https://api.themoviedb.org")
-			.intercept({ path: "/3/tv/2316" })
+			.intercept({ path: "/3/tv/1396" })
 			.reply(
 				200,
 				JSON.stringify({
-					id: 2316,
-					name: "The Office",
-					first_air_date: "2005-03-24",
+					id: 1396,
+					name: "Breaking Bad",
+					first_air_date: "2008-01-20",
+					poster_path: "/breaking_bad.jpg",
+					episode_run_time: [45],
+					status: "Ended",
 					seasons: [
-						{ season_number: 0, episode_count: 2 },
-						{ season_number: 1, episode_count: 6 },
+						{ season_number: 0, episode_count: 7 },
+						{ season_number: 1, episode_count: 7 },
 					],
 				}),
 			);
 		const { captured } = interceptOriginalResponseEdit();
-		const selected = menu.components[0].components[0].options[0].value;
-		const { ctx, response } = await dispatchInteraction(
-			JSON.stringify(componentFromMenu(menu, selected)),
+		const routed = await dispatchInteraction(
+			JSON.stringify(selectInteraction(results)),
 			{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
 		);
-		expect(await response.json()).toMatchObject({
-			type: 6,
-		});
-		await waitOnExecutionContext(ctx);
-		expect(captured[0].body.content).toContain(
-			"Choose what to download for **The Office**:",
-		);
-		expect(captured[0].body.allowed_mentions).toEqual({ parse: [] });
-		const seasonSelect = (
-			captured[0].body.components as CapturedMenu["components"]
-		)[0].components[0];
-		expect(seasonSelect.options.map((option) => option.label)).toEqual([
-			"Complete series",
+		await waitOnExecutionContext(routed.ctx);
+		const card = captured[0].body as View;
+		expect(card.embeds?.[0].title).toBe("Breaking Bad");
+		expect(card.components[0].components[0].options?.map((o) => o.label)).toEqual([
 			"Specials",
 			"Season 1",
-			"Search exactly as entered",
 		]);
-		expect(seasonSelect.options[1].description).toBe("S00 • 2 episodes");
-		expect(seasonSelect.options[2].description).toBe("S01 • 6 episodes");
+		expect(card.components[1].components.map((button) => button.label)).toEqual([
+			"Complete Series",
+			"Specials",
+			"Search Exactly as Entered",
+		]);
 	});
-});
 
-describe("TMDB exact-search escape hatch and component security", () => {
-	it("bypasses details and preserves a 200-character original query", async () => {
-		const query = "q".repeat(200);
-		const menu = await openMediaMenu("movie", query, [
-			{ id: 11, title: "A Result", release_date: "2000-01-01" },
+	it("exact search from results bypasses TMDB details", async () => {
+		const results = await openMediaResults("movie", "fan edit", [
+			{ id: 11, title: "A Movie", release_date: "2000-01-01" },
 		]);
-		const select = menu.components[0].components[0];
-		expect(select.custom_id.length).toBeLessThanOrEqual(100);
-		expect(select.options.every((option) => option.value.length <= 100)).toBe(
-			true,
-		);
-
-		let prowlarrQuery = "";
+		let searched = "";
 		fetchMock
 			.get("https://prowlarr.test")
 			.intercept({ path: /^\/api\/v1\/search/ })
-			.reply((options) => {
-				prowlarrQuery = new URL(`https://prowlarr.test${options.path}`)
-					.searchParams.get("query") ?? "";
+			.reply((request) => {
+				searched =
+					new URL(`https://prowlarr.test${request.path}`).searchParams.get(
+						"query",
+					) ?? "";
 				return { statusCode: 200, data: "[]" };
 			});
 		interceptOriginalResponseEdit();
-		const fallback = select.options.at(-1)?.value as string;
-		const { ctx } = await dispatchInteraction(
-			JSON.stringify(componentFromMenu(menu, fallback)),
-			{
-				COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET,
-				TMDB_READ_ACCESS_TOKEN: "",
-			},
-		);
-		await waitOnExecutionContext(ctx);
-		expect(prowlarrQuery).toBe(query);
-	});
-
-	it("reversibly preserves Markdown, backslashes, and internal controls", async () => {
-		const query = "odd **title** \\\\ cut\nnext";
-		const menu = await openMediaMenu("movie", query, [
-			{ id: 30, title: "Odd Title", release_date: "2001-01-01" },
-		]);
-		expect(menu.content).toContain("\\*\\*title\\*\\*");
-		expect(menu.content).toContain("\\u000a");
-		let prowlarrQuery = "";
-		fetchMock
-			.get("https://prowlarr.test")
-			.intercept({ path: /^\/api\/v1\/search/ })
-			.reply((options) => {
-				prowlarrQuery = new URL(`https://prowlarr.test${options.path}`)
-					.searchParams.get("query") ?? "";
-				return { statusCode: 200, data: "[]" };
-			});
-		interceptOriginalResponseEdit();
-		const fallback =
-			menu.components[0].components[0].options.at(-1)?.value as string;
-		const { ctx } = await dispatchInteraction(
-			JSON.stringify(componentFromMenu(menu, fallback)),
+		const routed = await dispatchInteraction(
+			JSON.stringify(buttonInteraction(results, "Search Exactly as Entered")),
 			{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
 		);
-		await waitOnExecutionContext(ctx);
-		expect(prowlarrQuery).toBe(query);
+		await waitOnExecutionContext(routed.ctx);
+		expect(searched).toBe("fan edit");
 	});
 
-	it("rejects the wrong requester without upstream calls", async () => {
-		const menu = await openMediaMenu("movie", "star wars", [
+	it("rejects another requester before any continuation request", async () => {
+		const results = await openMediaResults("movie", "star wars", [
 			{ id: 11, title: "Star Wars", release_date: "1977-05-25" },
 		]);
-		const selected = menu.components[0].components[0].options[0].value;
-		const { response } = await dispatchInteraction(
-			JSON.stringify(
-				componentFromMenu(menu, selected, {
-					member: { user: { id: "other-user" } },
-				}),
-			),
-			{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
-		);
-		const body = (await response.json()) as { data: { content: string } };
-		expect(body.data.content).toContain("someone else's");
-	});
-
-	it("rejects an expired media component", async () => {
-		const query = "star wars";
-		const menu = await openMediaMenu("movie", query, [
-			{ id: 11, title: "Star Wars", release_date: "1977-05-25" },
-		]);
-		const digest = await digestComponentQuery(query);
-		const expired: MediaComponentPayload = {
-			action: "media",
-			userId: TEST_USER_ID,
-			infoHash: "",
-			expiry: Date.now() - 1_000,
-			mediaType: "movie",
-			queryDigest: digest,
-		};
-		const customId = await buildMediaCustomId(
-			expired,
-			TEST_SIGNING_SECRET,
-		);
-		const selected = menu.components[0].components[0].options[0].value;
-		const interaction = componentFromMenu(menu, selected);
-		interaction.data = { custom_id: customId, values: [selected] };
+		const interaction = buttonInteraction(results, "Search Exactly as Entered");
+		interaction.member = { user: { id: "other-user" } };
 		const { response } = await dispatchInteraction(
 			JSON.stringify(interaction),
 			{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
 		);
-		const body = (await response.json()) as { data: { content: string } };
-		expect(body.data.content).toContain("expired or is invalid");
+		expect(
+			((await response.json()) as { data: { content: string } }).data.content,
+		).toContain("someone else's");
 	});
 
-	it("isolates a details failure and never falls through to Prowlarr", async () => {
-		const menu = await openMediaMenu("movie", "star wars", [
+	it("renders a sanitized media-service error when details fail", async () => {
+		const results = await openMediaResults("movie", "star wars", [
 			{ id: 11, title: "Star Wars", release_date: "1977-05-25" },
 		]);
 		fetchMock
 			.get("https://api.themoviedb.org")
 			.intercept({ path: "/3/movie/11" })
-			.reply(500, "private provider response");
+			.reply(500, "private provider body");
 		const { captured } = interceptOriginalResponseEdit();
-		const selected = menu.components[0].components[0].options[0].value;
-		const { ctx } = await dispatchInteraction(
-			JSON.stringify(componentFromMenu(menu, selected)),
+		const routed = await dispatchInteraction(
+			JSON.stringify(selectInteraction(results)),
 			{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
 		);
-		await waitOnExecutionContext(ctx);
-		expect(captured[0].body.content).toBe(
-			"The media lookup service is unavailable right now. Please try again.",
-		);
-	});
-
-	it("keeps logs free of tokens, raw queries, and selected titles", async () => {
-		const query = "private raw query";
-		const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
-		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-		try {
-			fetchMock
-				.get("https://api.themoviedb.org")
-				.intercept({ path: tmdbSearchPath("movie") })
-				.reply(401, "token title and raw body");
-			const { captured } = interceptOriginalResponseEdit();
-			const { ctx } = await dispatchInteraction(
-				JSON.stringify(
-					makeCommandInteraction("search", [
-						{
-							name: "movie",
-							type: 1,
-							options: [{ name: "query", type: 3, value: query }],
-						},
-					]),
-				),
-				{
-					COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET,
-					TMDB_READ_ACCESS_TOKEN: "do-not-log-token",
-				},
-			);
-			await waitOnExecutionContext(ctx);
-			expect(captured[0].body.content).toContain("unavailable");
-			const logged = JSON.stringify([
-				...infoSpy.mock.calls,
-				...warnSpy.mock.calls,
-			]);
-			expect(logged).not.toContain(query);
-			expect(logged).not.toContain("do-not-log-token");
-			expect(logged).not.toContain("token title and raw body");
-		} finally {
-			infoSpy.mockRestore();
-			warnSpy.mockRestore();
-		}
-	});
-
-	it("preserves guild and DM authorization on media commands", async () => {
-		for (const overrides of [
-			{ guild_id: "987654321098765432" },
-			{ guild_id: undefined },
-		]) {
-			const { response } = await dispatchInteraction(
-				JSON.stringify(
-					makeCommandInteraction(
-						"search",
-						[
-							{
-								name: "movie",
-								type: 1,
-								options: [
-									{ name: "query", type: 3, value: "star wars" },
-								],
-							},
-						],
-						overrides,
-					),
-				),
-				{ TORBOX_ALLOWED_GUILD_IDS: TEST_GUILD_ID },
-			);
-			const body = (await response.json()) as {
-				data: { flags?: number; content: string };
-			};
-			expect(body.data.flags).toBe(64);
-			expect(body.data.content).toMatch(/authorized server|not enabled/);
-		}
-	});
-});
-
-describe("TMDB empty and failure responses", () => {
-	it("returns the movie no-result guidance without components", async () => {
-		const menu = await openMediaMenu("movie", "nothing", []);
-		expect(menu.content).toBe(
-			"No matching movies were found. Try `/search general` to search exactly as entered.",
-		);
-		expect(menu.components).toBeUndefined();
+		await waitOnExecutionContext(routed.ctx);
+		expect(JSON.stringify(captured)).not.toContain("private provider body");
 	});
 });

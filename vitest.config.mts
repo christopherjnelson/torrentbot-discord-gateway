@@ -12,6 +12,8 @@ export default defineWorkersConfig({
 					compatibilityDate: "2026-07-24",
 					compatibilityFlags: ["nodejs_compat"],
 					bindings: {
+						DISCORD_PUBLIC_KEY:
+							"0000000000000000000000000000000000000000000000000000000000000000",
 						UPSTREAM_TIMEOUT_MS: "10000",
 						TORBOX_POLL_INTERVAL_MS: "2500",
 						TORBOX_POLL_MAX_ATTEMPTS: "7",

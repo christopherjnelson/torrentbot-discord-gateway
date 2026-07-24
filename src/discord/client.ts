@@ -1,6 +1,7 @@
 import { fetchText } from "../utils/http";
 import { UpstreamParseError } from "../utils/errors";
 import { FLAG_EPHEMERAL } from "./responses";
+import type { DiscordMessagePayload } from "./presentation";
 
 /**
  * Minimal Discord REST client for interaction follow-ups.
@@ -16,10 +17,7 @@ import { FLAG_EPHEMERAL } from "./responses";
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 
-export interface FollowupMessage {
-	content: string;
-	components?: object[];
-}
+export type FollowupMessage = DiscordMessagePayload;
 
 /**
  * Normalized Discord API failure. Carries only fields safe to log:
@@ -108,10 +106,15 @@ async function patchWebhookMessage(
 	timeoutMs?: number,
 ): Promise<void> {
 	const body: Record<string, unknown> = {
-		content: message.content,
 		allowed_mentions: { parse: [] },
 	};
-	if (message.components) {
+	if (message.content !== undefined) {
+		body.content = message.content;
+	}
+	if (message.embeds !== undefined) {
+		body.embeds = message.embeds;
+	}
+	if (message.components !== undefined) {
 		body.components = message.components;
 	}
 
@@ -179,7 +182,11 @@ export async function createFollowupMessage(
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify({
-			content: message.content,
+			...(message.content !== undefined ? { content: message.content } : {}),
+			...(message.embeds !== undefined ? { embeds: message.embeds } : {}),
+			...(message.components !== undefined
+				? { components: message.components }
+				: {}),
 			allowed_mentions: { parse: [] },
 			flags: FLAG_EPHEMERAL,
 		}),

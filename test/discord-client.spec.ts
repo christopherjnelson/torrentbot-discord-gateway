@@ -50,7 +50,7 @@ describe("/search select menu payload", () => {
 			TEST_SIGNING_SECRET,
 		)) as any[];
 		expect(components).not.toBeNull();
-		expect(components).toHaveLength(1);
+		expect(components).toHaveLength(2);
 
 		const row = components[0];
 		expect(row.type).toBe(1); // ActionRow
@@ -77,9 +77,11 @@ describe("/search select menu payload", () => {
 		expect(opt0.description).toContain("The Pirate Bay");
 		expect(opt0.description).not.toContain("undefined");
 		// Info hash is the hidden value only — never in label/description.
-		expect(opt0.value).toBe("0123456789ABCDEF0123456789ABCDEF01234567");
-		expect(opt0.label).not.toContain(opt0.value);
-		expect(opt0.description).not.toContain(opt0.value);
+		expect(opt0.value).toMatch(
+			/^0123456789ABCDEF0123456789ABCDEF01234567\.[A-Za-z0-9_-]{22}$/,
+		);
+		expect(opt0.label).not.toContain("0123456789ABCDEF");
+		expect(opt0.description).not.toContain("0123456789ABCDEF");
 
 		// Option 1: missing metadata is omitted cleanly (no placeholder).
 		const opt1 = select.options[1];
@@ -143,7 +145,7 @@ describe("/search select menu payload", () => {
 		expect(row.type).toBe(1);
 		const select = row.components[0];
 		expect(select.type).toBe(3);
-		expect(select.custom_id.startsWith("tb:a:")).toBe(true);
+		expect(select.custom_id.startsWith("tb:w:")).toBe(true);
 		expect(select.custom_id.length).toBeLessThanOrEqual(DISCORD_ID_LIMIT);
 	});
 });

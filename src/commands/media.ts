@@ -6,7 +6,9 @@ import type { MediaSearchResult, MediaType } from "../types/media";
 import { sanitizeInline } from "../utils/format";
 import {
 	buildMediaCustomId,
+	buildWorkflowCustomId,
 	createMediaPayload,
+	createWorkflowPayload,
 	digestComponentQuery,
 	DISCORD_ID_LIMIT,
 	MAX_SELECT_OPTIONS,
@@ -191,7 +193,7 @@ export async function buildMediaComponents(
 				sanitizeInline(result.title, 100).length > 0,
 		)
 		.slice(0, TMDB_MENU_RESULT_CAP);
-	const optionCount = bounded.length + 1;
+	const optionCount = bounded.length;
 	if (optionCount > MAX_SELECT_OPTIONS) {
 		throw new Error("too many media select options");
 	}
@@ -219,19 +221,29 @@ export async function buildMediaComponents(
 		});
 	}
 
-	options.push({
-		label: "Search exactly as entered",
-		value: await buildOptionValue(
-			"fallback",
-			0,
-			queryDigest,
-			signingSecret,
-		),
-		description: "Bypass TMDB and search Prowlarr directly",
-	});
-
+	const mediaPayload = createMediaPayload(userId, mediaType, queryDigest);
 	const customId = await buildMediaCustomId(
-		createMediaPayload(userId, mediaType, queryDigest),
+		mediaPayload,
+		signingSecret,
+	);
+	const exactId = await buildWorkflowCustomId(
+		createWorkflowPayload({
+			userId,
+			action: "exact",
+			mediaType,
+			queryDigest,
+			expiry: mediaPayload.expiry,
+		}),
+		signingSecret,
+	);
+	const cancelId = await buildWorkflowCustomId(
+		createWorkflowPayload({
+			userId,
+			action: "cancel",
+			mediaType,
+			queryDigest,
+			expiry: mediaPayload.expiry,
+		}),
 		signingSecret,
 	);
 	return [
@@ -246,6 +258,23 @@ export async function buildMediaComponents(
 							? "Select a movie"
 							: "Select a TV series",
 					options,
+				},
+			],
+		},
+		{
+			type: 1,
+			components: [
+				{
+					type: 2,
+					style: 2,
+					label: "Search Exactly as Entered",
+					custom_id: exactId,
+				},
+				{
+					type: 2,
+					style: 4,
+					label: "Cancel",
+					custom_id: cancelId,
 				},
 			],
 		},

@@ -230,6 +230,39 @@ describe("TMDB details client", () => {
 		});
 	});
 
+	it("normalizes only bounded card metadata and rejects arbitrary poster URLs", async () => {
+		fetchMock
+			.get("https://api.themoviedb.org")
+			.intercept({ path: "/3/movie/11" })
+			.reply(
+				200,
+				JSON.stringify({
+					id: 11,
+					title: "Star Wars",
+					release_date: "1977-05-25",
+					overview: "A hero\nsets out.",
+					poster_path: "https://attacker.example/poster.jpg",
+					genres: [
+						{ name: "Adventure" },
+						{ name: "Adventure" },
+						{ name: "Science Fiction" },
+					],
+					runtime: 121,
+					status: "Released",
+				}),
+			);
+		await expect(
+			getTmdbDetails("movie", 11, { readAccessToken: TOKEN }),
+		).resolves.toMatchObject({
+			overview: "A hero sets out.",
+			posterPath: null,
+			genres: ["Adventure", "Science Fiction"],
+			runtimeMinutes: 121,
+			episodeRunTimeMinutes: null,
+			status: "Released",
+		});
+	});
+
 	it("rejects details whose returned ID does not match", async () => {
 		fetchMock
 			.get("https://api.themoviedb.org")

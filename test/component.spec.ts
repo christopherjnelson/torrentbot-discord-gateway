@@ -6,12 +6,17 @@ import {
 	parseAndVerifyCustomId,
 	isValidInfoHash,
 	CUSTOM_ID_PREFIX,
+	buildWorkflowCustomId,
+	createWorkflowPayload,
+	digestComponentQuery,
+	signPayload,
 } from "../src/utils/signing";
 import { TEST_SIGNING_SECRET } from "./fixtures";
 import {
 	dispatchInteraction,
 	interceptFollowupCreate,
 	interceptFollowupEdit,
+	interceptOriginalResponseEdit,
 	makeCommandInteraction,
 	makeComponentInteraction,
 	TEST_APPLICATION_ID,
@@ -387,6 +392,91 @@ async function dispatchSelection(
 }
 
 describe("component TorBox download flow", () => {
+	it("evolves the same response into a ready card with a link button", async () => {
+		const queryDigest = await digestComponentQuery("test");
+		const payload = createWorkflowPayload({
+			userId: TEST_USER_ID,
+			action: "release",
+			mediaType: "general",
+			queryDigest,
+		});
+		const customId = await buildWorkflowCustomId(
+			payload,
+			TEST_SIGNING_SECRET,
+		);
+		const signature = await signPayload(
+			[
+				TEST_HASH,
+				payload.userId,
+				payload.mediaType,
+				"0",
+				"n",
+				payload.queryDigest,
+				String(Math.floor(payload.expiry / 1000)),
+			].join(":"),
+			TEST_SIGNING_SECRET,
+		);
+		const selectedValue = `${TEST_HASH}.${signature}`;
+		interceptTbCreate(200, tbCreateOk(42, TEST_HASH));
+		interceptTbMylist(tbListBody(tbTorrentRaw()));
+		interceptTbRequestdl(tbLinkBody(TEST_DOWNLOAD_URL));
+		const edits = interceptOriginalResponseEdit();
+		const { response, ctx } = await dispatchInteraction(
+			JSON.stringify(
+				makeComponentInteraction({
+					data: { custom_id: customId, values: [selectedValue] },
+					message: {
+						content: "Choose a release",
+						embeds: [
+							{
+								title: "General search",
+								footer: { text: "Original search: test" },
+							},
+						],
+						components: [
+							{
+								type: 1,
+								components: [
+									{
+										type: 3,
+										custom_id: customId,
+										options: [{ value: selectedValue }],
+									},
+								],
+							},
+						],
+					},
+				}),
+			),
+			{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
+		);
+		expect(await response.json()).toMatchObject({
+			type: 7,
+			data: { components: [] },
+		});
+		await waitOnExecutionContext(ctx);
+		expect(edits.captured).toHaveLength(1);
+		expect(edits.captured[0].body.embeds?.[0]?.title).toBe("General search");
+		const buttons = (
+			edits.captured[0].body.components as Array<{
+				components: Array<{
+					label: string;
+					style: number;
+					url?: string;
+				}>;
+			}>
+		)[0].components;
+		expect(buttons[0]).toMatchObject({
+			label: "Download",
+			style: 5,
+			url: TEST_DOWNLOAD_URL,
+		});
+		expect(buttons[1]).toMatchObject({
+			label: "New Search",
+			style: 2,
+		});
+	});
+
 	it("removes the menu and returns an ephemeral link for a ready torrent", async () => {
 		const followups = interceptFollowupCreate();
 		const edits = interceptFollowupEdit();
@@ -484,7 +574,7 @@ describe("component TorBox download flow", () => {
 		expect(final).toContain("Added to TorBox.");
 		expect(final).toContain("**Backrooms (2026) [1080p]**");
 		expect(final).toContain("still processing");
-		expect(final).toContain("ID `42`");
+		expect(final).toContain("Progress: 40%");
 		expect(final).toContain("/status");
 		expect(final).not.toContain("http");
 		expect(followups.captured[0].body.flags).toBe(64);

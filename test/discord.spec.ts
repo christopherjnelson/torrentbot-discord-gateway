@@ -391,8 +391,10 @@ describe("/search command", () => {
 		expect(select.options[0].description).toContain("120 seeds");
 		expect(select.options[0].description).toContain("ExampleTracker");
 		// Hidden value is the info hash; never shown in content or label.
-		expect(select.options[0].value).toBe("89abcdef012345670123456789abcdef01234567");
-		expect(content).not.toContain(select.options[0].value);
+		expect(select.options[0].value).toMatch(
+			/^89abcdef012345670123456789abcdef01234567\.[A-Za-z0-9_-]{22}$/,
+		);
+		expect(content).not.toContain("89abcdef012345670123456789abcdef01234567");
 		expect(select.options[0].label).not.toContain(select.options[0].value);
 		expect(select.options[0].description).not.toContain(select.options[0].value);
 		// Magnet URIs and Prowlarr proxy URLs (which embed the API key) must
@@ -747,7 +749,9 @@ describe("/search TorBox cache enrichment", () => {
 		const hashes = (cacheBody as { hashes: string[] }).hashes;
 		expect(hashes).toHaveLength(10);
 		// The cache request includes the same normalized (lowercase) hashes.
-		const optionValues = options.map((o: { value: string }) => o.value.toLowerCase());
+		const optionValues = options.map((o: { value: string }) =>
+			o.value.slice(0, 40).toLowerCase(),
+		);
 		expect(hashes.sort()).toEqual([...optionValues].sort());
 		// Dedup: all option values are distinct (the duplicate hash appears once).
 		expect(new Set(optionValues).size).toBe(optionValues.length);

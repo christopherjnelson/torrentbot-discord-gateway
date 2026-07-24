@@ -23,6 +23,12 @@ function details(seasons: TvSeasonSummary[]): TvDetails {
 		originalTitle: "Breaking Bad",
 		year: 2008,
 		popularity: null,
+		overview: null,
+		posterPath: null,
+		genres: [],
+		runtimeMinutes: null,
+		episodeRunTimeMinutes: 45,
+		status: "Ended",
 		seasons,
 	};
 }
@@ -90,19 +96,14 @@ describe("TV season query construction", () => {
 });
 
 describe("bounded TV season menu", () => {
-	it("renders Complete, Specials, numbered seasons, and exact search", async () => {
-		const select = selectFrom(
-			await pageComponents([
+	it("keeps seasons in the menu and renders actions as buttons", async () => {
+		const components = await pageComponents([
 				{ seasonNumber: 0, episodeCount: 5 },
 				{ seasonNumber: 1, episodeCount: 7 },
 				{ seasonNumber: 2, episodeCount: null },
-			]),
-		);
+			]);
+		const select = selectFrom(components);
 		expect(select.options).toMatchObject([
-			{
-				label: "Complete series",
-				description: "All seasons",
-			},
 			{
 				label: "Specials",
 				description: "S00 • 5 episodes",
@@ -115,12 +116,19 @@ describe("bounded TV season menu", () => {
 				label: "Season 2",
 				description: "S02",
 			},
-			{
-				label: "Search exactly as entered",
-				description: "Bypass season selection",
-			},
 		]);
-		expect(select.options.at(-1)?.label).toBe("Search exactly as entered");
+		expect(
+			(components as Array<{ components: Array<{ label?: string }> }>)
+				.flatMap((row) => row.components)
+				.map((component) => component.label)
+				.filter(Boolean),
+		).toEqual([
+			"Complete Series",
+			"Specials",
+			"Search Exactly as Entered",
+			"Back",
+			"Cancel",
+		]);
 		expect(select.custom_id.length).toBeLessThanOrEqual(100);
 		for (const option of select.options) {
 			expect(option.label.length).toBeLessThanOrEqual(100);
@@ -140,11 +148,18 @@ describe("bounded TV season menu", () => {
 		);
 	});
 
-	it("offers Complete and exact search when no valid seasons exist", async () => {
-		const select = selectFrom(await pageComponents([]));
-		expect(select.options.map((option) => option.label)).toEqual([
-			"Complete series",
-			"Search exactly as entered",
+	it("offers action buttons when no valid seasons exist", async () => {
+		const components = await pageComponents([]);
+		expect(components).toHaveLength(2);
+		expect(
+			(components as Array<{ components: Array<{ label?: string }> }>)
+				.flatMap((row) => row.components)
+				.map((component) => component.label),
+		).toEqual([
+			"Complete Series",
+			"Search Exactly as Entered",
+			"Back",
+			"Cancel",
 		]);
 		expect(formatSeasonHeading("Example", "exact query", false)).toContain(
 			"No season information was available.",
@@ -163,9 +178,6 @@ describe("bounded TV season menu", () => {
 		for (let page = 0; page < 3; page++) {
 			const select = selectFrom(await pageComponents(seasons, page));
 			expect(select.options.length).toBeLessThanOrEqual(25);
-			expect(select.options.at(-1)?.label).toBe(
-				"Search exactly as entered",
-			);
 			expect(
 				await parseAndVerifyCustomId(
 					select.custom_id,
@@ -177,15 +189,15 @@ describe("bounded TV season menu", () => {
 				seriesId: 1396,
 				page,
 			});
-			expect(
-				select.options.some((option) => option.label === "Complete series"),
-			).toBe(page === 0);
-			expect(
-				select.options.some((option) => option.label === "Previous seasons"),
-			).toBe(page > 0);
-			expect(
-				select.options.some((option) => option.label === "Next seasons"),
-			).toBe(page < 2);
+			const labels = (
+				(await pageComponents(seasons, page)) as Array<{
+					components: Array<{ label?: string }>;
+				}>
+			)
+				.flatMap((row) => row.components)
+				.map((component) => component.label);
+			expect(labels.includes("Previous")).toBe(page > 0);
+			expect(labels.includes("Next")).toBe(page < 2);
 
 			for (const option of select.options) {
 				if (option.label === "Specials") {

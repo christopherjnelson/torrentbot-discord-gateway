@@ -28,7 +28,7 @@ import {
 	type TorrentReadiness,
 } from "../services/torbox";
 import { getTmdbDetails } from "../services/tmdb";
-import type { TvDetails } from "../types/media";
+import type { MediaDetails, TvDetails } from "../types/media";
 import type { TorboxTorrent } from "../types/torbox";
 import {
 	UpstreamApiError,
@@ -38,7 +38,7 @@ import {
 } from "../utils/errors";
 import { formatBytes, sanitizeInline } from "../utils/format";
 import type { TorrentResult } from "../types/search";
-import { completeSearch, formatResultDescription } from "./search";
+import { completeMediaLookup, completeSearch } from "./search";
 import { extractMediaSelection } from "./media";
 import {
 	buildSeasonComponents,
@@ -54,6 +54,21 @@ import {
 	logUpstreamFailure,
 	upstreamErrorMessage,
 } from "./shared";
+import { progressPercent } from "./status";
+import {
+	actionRow,
+	BUTTON_DANGER,
+	BUTTON_PRIMARY,
+	BUTTON_SECONDARY,
+	button,
+	errorEmbed,
+	mediaDetailsEmbed,
+	queryFromFooter,
+	releaseOptionDescription,
+	statusEmbed,
+	validateMessagePayload,
+	type DiscordMessagePayload,
+} from "../discord/presentation";
 import {
 	parseAndVerifyCustomId,
 	createPayload,
@@ -63,6 +78,12 @@ import {
 	MAX_SELECT_OPTIONS,
 	SELECT_OPTION_CAP,
 	createSeasonPayload,
+	buildWorkflowCustomId,
+	createWorkflowPayload,
+	digestComponentQuery,
+	signPayload,
+	verifySignature,
+	type WorkflowComponentPayload,
 	type MediaComponentPayload,
 	type SeasonComponentPayload,
 } from "../utils/signing";
@@ -135,6 +156,82 @@ export async function handleComponentInteraction(
 		return messageResponse(guildAuthMessage(authStatus), true);
 	}
 
+	if ("mediaId" in payload) {
+		const workflowPayload = payload as WorkflowComponentPayload;
+		if (workflowPayload.action === "cancel") {
+			return updateMessageResponse({
+				content: "Search cancelled.",
+				embeds: [],
+				components: [],
+			});
+		}
+		if (workflowPayload.action === "new-search") {
+			return updateMessageResponse({
+				content: "Run `/search` to start a new media search.",
+				embeds: [],
+				components: [],
+			});
+		}
+		const originalQuery = queryFromFooter(interaction.message?.embeds);
+		if (
+			originalQuery === null ||
+			originalQuery.length === 0 ||
+			originalQuery.length > 200 ||
+			(await digestComponentQuery(originalQuery)) !==
+				workflowPayload.queryDigest
+		) {
+			return messageResponse(
+				"This selection has expired or is invalid. Please run `/search` again.",
+				true,
+			);
+		}
+		if (workflowPayload.action === "release") {
+			if (!config.torboxApiKey) {
+				return messageResponse(
+					"TorBox is not configured on this bot.",
+					true,
+				);
+			}
+			const selectedHash = await extractReleaseHash(
+				interaction,
+				workflowPayload,
+				config.componentSigningSecret,
+			);
+			if (!selectedHash) {
+				return messageResponse(
+					"Invalid or stale release selection. Please search again.",
+					true,
+				);
+			}
+			ctx.waitUntil(
+				processComponentInteraction(
+					interaction,
+					selectedHash,
+					config,
+					workflowPayload,
+				),
+			);
+			return updateMessageResponse({
+				content: "",
+				embeds: [
+					statusEmbed("Adding to TorBox", "Processing", {
+						description: "The selected release is being added.",
+					}),
+				],
+				components: [],
+			});
+		}
+		ctx.waitUntil(
+			processWorkflowComponentInteraction(
+				interaction,
+				workflowPayload,
+				originalQuery,
+				config,
+			),
+		);
+		return deferredUpdateMessageResponse();
+	}
+
 	if (payload.action === "media") {
 		if (
 			!config.prowlarrUrl ||
@@ -189,7 +286,22 @@ export async function handleComponentInteraction(
 			);
 		}
 		if (selection.kind === "exact") {
-			ctx.waitUntil(completeSearch(interaction, selection.query, config));
+			ctx.waitUntil(
+				completeSearch(
+					interaction,
+					selection.query,
+					config,
+					createWorkflowPayload({
+						userId: payload.userId,
+						action: "release",
+						mediaType: "tv",
+						mediaId: payload.seriesId,
+						page: payload.page,
+						queryDigest: payload.queryDigest,
+						expiry: payload.expiry,
+					}),
+				),
+			);
 			return deferredUpdateMessageResponse();
 		}
 		if (!config.tmdbReadAccessToken) {
@@ -247,7 +359,6 @@ async function processMediaComponentInteraction(
 		return;
 	}
 
-	let canonicalQuery: string;
 	try {
 		if (payload.mediaType === "tv") {
 			const startedAt = Date.now();
@@ -279,17 +390,20 @@ async function processMediaComponentInteraction(
 				config.componentSigningSecret as string,
 			);
 			try {
+				const view = {
+					content: "",
+					embeds: [
+						mediaDetailsEmbed(details, selection.query, {
+							step: "Choose complete series, specials, or a season",
+						}),
+					],
+					components,
+				};
+				validateMessagePayload(view);
 				await editOriginalResponse(
 					interaction.application_id,
 					interaction.token,
-					{
-						content: formatSeasonHeading(
-							details.title,
-							selection.query,
-							details.seasons.length > 0,
-						),
-						components,
-					},
+					view,
 				);
 			} catch (error) {
 				logDiscordApiFailure(
@@ -304,10 +418,8 @@ async function processMediaComponentInteraction(
 			readAccessToken: config.tmdbReadAccessToken as string,
 			timeoutMs: config.upstreamTimeoutMs,
 		});
-		canonicalQuery = details.year
-			? `${details.title} ${details.year}`
-			: details.title;
-		canonicalQuery = canonicalQuery.replace(/\s+/g, " ").trim();
+		await editMovieDetails(interaction, details, selection.query, payload, config);
+		return;
 	} catch (error) {
 		logUpstreamFailure("tmdb details failed", error);
 		try {
@@ -327,8 +439,249 @@ async function processMediaComponentInteraction(
 		}
 		return;
 	}
+}
 
-	await completeSearch(interaction, canonicalQuery, config);
+async function editMovieDetails(
+	interaction: DiscordInteraction,
+	details: MediaDetails,
+	originalQuery: string,
+	sourcePayload: { userId: string; queryDigest: string; expiry: number },
+	config: AppConfig,
+): Promise<void> {
+	const base = createWorkflowPayload({
+		userId: sourcePayload.userId,
+		action: "movie-search",
+		mediaType: "movie",
+		mediaId: details.id,
+		queryDigest: sourcePayload.queryDigest,
+		expiry: sourcePayload.expiry,
+	});
+	const components = [
+		actionRow(
+			button({
+				label: "Search Releases",
+				style: BUTTON_PRIMARY,
+				customId: await buildWorkflowCustomId(
+					base,
+					config.componentSigningSecret as string,
+				),
+			}),
+			button({
+				label: "Search Exactly as Entered",
+				style: BUTTON_SECONDARY,
+				customId: await buildWorkflowCustomId(
+					{ ...base, action: "exact" },
+					config.componentSigningSecret as string,
+				),
+			}),
+			button({
+				label: "Back",
+				style: BUTTON_SECONDARY,
+				customId: await buildWorkflowCustomId(
+					{ ...base, action: "back-results" },
+					config.componentSigningSecret as string,
+				),
+			}),
+			button({
+				label: "Cancel",
+				style: BUTTON_DANGER,
+				customId: await buildWorkflowCustomId(
+					{ ...base, action: "cancel" },
+					config.componentSigningSecret as string,
+				),
+			}),
+		),
+	];
+	const view: DiscordMessagePayload = {
+		content: "",
+		embeds: [
+			mediaDetailsEmbed(details, originalQuery, {
+				step: "Review the movie and choose how to search",
+			}),
+		],
+		components,
+	};
+	validateMessagePayload(view);
+	await editOriginalResponse(
+		interaction.application_id,
+		interaction.token,
+		view,
+	);
+}
+
+async function editTvDetails(
+	interaction: DiscordInteraction,
+	details: TvDetails,
+	originalQuery: string,
+	payload: WorkflowComponentPayload,
+	config: AppConfig,
+): Promise<void> {
+	const seasonPayload = createSeasonPayload(
+		payload.userId,
+		details.id,
+		payload.page,
+		payload.queryDigest,
+		payload.expiry,
+	);
+	const view: DiscordMessagePayload = {
+		content: "",
+		embeds: [
+			mediaDetailsEmbed(details, originalQuery, {
+				step: "Choose complete series, specials, or a season",
+			}),
+		],
+		components: await buildSeasonComponents(
+			details,
+			originalQuery,
+			seasonPayload,
+			config.componentSigningSecret as string,
+		),
+	};
+	validateMessagePayload(view);
+	await editOriginalResponse(
+		interaction.application_id,
+		interaction.token,
+		view,
+	);
+}
+
+async function processWorkflowComponentInteraction(
+	interaction: DiscordInteraction,
+	payload: WorkflowComponentPayload,
+	originalQuery: string,
+	config: AppConfig,
+): Promise<void> {
+	try {
+		if (payload.action === "exact") {
+			await completeSearch(interaction, originalQuery, config, {
+				...payload,
+				action: "release",
+			});
+			return;
+		}
+		if (payload.action === "back-results") {
+			if (payload.mediaType === "general") {
+				await completeSearch(interaction, originalQuery, config, {
+					...payload,
+					action: "release",
+				});
+				return;
+			}
+			await completeMediaLookup(
+				interaction,
+				payload.mediaType,
+				originalQuery,
+				config,
+			);
+			return;
+		}
+		if (
+			!config.tmdbReadAccessToken ||
+			payload.mediaType === "general" ||
+			payload.mediaId <= 0
+		) {
+			throw new Error("workflow media state unavailable");
+		}
+		if (payload.mediaType === "movie") {
+			const details = await getTmdbDetails("movie", payload.mediaId, {
+				readAccessToken: config.tmdbReadAccessToken,
+				timeoutMs: config.upstreamTimeoutMs,
+			});
+			if (payload.action === "movie-search") {
+				const query = details.year
+					? `${details.title} ${details.year}`
+					: details.title;
+				await completeSearch(interaction, query, config, {
+					...payload,
+					action: "release",
+				});
+				return;
+			}
+			if (payload.action === "back-details") {
+				await editMovieDetails(
+					interaction,
+					details,
+					originalQuery,
+					payload,
+					config,
+				);
+				return;
+			}
+		}
+		if (payload.mediaType === "tv") {
+			const details = await getTmdbDetails("tv", payload.mediaId, {
+				readAccessToken: config.tmdbReadAccessToken,
+				timeoutMs: config.upstreamTimeoutMs,
+			});
+			if (
+				payload.action === "previous" ||
+				payload.action === "next" ||
+				payload.action === "back-details"
+			) {
+				if (payload.page >= seasonPageCount(details.seasons)) {
+					await editSeasonSelectionUnavailable(interaction);
+					return;
+				}
+				await editTvDetails(
+					interaction,
+					details,
+					originalQuery,
+					payload,
+					config,
+				);
+				return;
+			}
+			const seasonNumber =
+				payload.action === "tv-complete"
+					? "complete"
+					: payload.action === "tv-specials"
+						? 0
+						: null;
+			if (
+				seasonNumber === null ||
+				(seasonNumber === 0 &&
+					!details.seasons.some((season) => season.seasonNumber === 0))
+			) {
+				await editSeasonSelectionUnavailable(interaction);
+				return;
+			}
+			const query = buildTvSeasonQuery(details.title, seasonNumber);
+			if (!query) {
+				await editSeasonSelectionUnavailable(interaction);
+				return;
+			}
+			await completeSearch(interaction, query, config, {
+				...payload,
+				action: "release",
+				seasonNumber: seasonNumber === "complete" ? -1 : seasonNumber,
+			});
+			return;
+		}
+		throw new Error("unsupported workflow action");
+	} catch (error) {
+		logUpstreamFailure("media workflow failed", error);
+		try {
+			await editOriginalResponse(
+				interaction.application_id,
+				interaction.token,
+				{
+					content: "",
+					embeds: [
+						errorEmbed(
+							"Media lookup unavailable",
+							"The media service could not be reached. Try again shortly.",
+						),
+					],
+					components: [],
+				},
+			);
+		} catch (discordError) {
+			logDiscordApiFailure(
+				"failed to edit interaction response",
+				discordError,
+			);
+		}
+	}
 }
 
 async function editSeasonSelectionUnavailable(
@@ -447,7 +800,22 @@ async function processSeasonComponentInteraction(
 		await editSeasonSelectionUnavailable(interaction);
 		return;
 	}
-	await completeSearch(interaction, canonicalQuery, config);
+	await completeSearch(
+		interaction,
+		canonicalQuery,
+		config,
+		createWorkflowPayload({
+			userId: payload.userId,
+			action: "release",
+			mediaType: "tv",
+			mediaId: payload.seriesId,
+			seasonNumber:
+				selection.kind === "complete" ? -1 : selection.seasonNumber,
+			page: payload.page,
+			queryDigest: payload.queryDigest,
+			expiry: payload.expiry,
+		}),
+	);
 }
 
 /**
@@ -460,7 +828,66 @@ async function processComponentInteraction(
 	interaction: DiscordInteraction,
 	selectedHash: string,
 	config: AppConfig,
+	workflowPayload?: WorkflowComponentPayload,
 ): Promise<void> {
+	if (workflowPayload) {
+		const content = await addAndAwaitDownload(selectedHash, config);
+		const downloadUrl = /\]\((https:\/\/[^)]+)\)/.exec(content)?.[1];
+		const title =
+			interaction.message?.embeds?.[0]?.title ?? "TorBox download";
+		const ready = content.includes("Ready to download") && downloadUrl;
+		const processing = content.includes("still processing");
+		const components: object[] = [];
+		if (ready && downloadUrl) {
+			components.push(
+				actionRow(
+					button({
+						label: "Download",
+						style: 5,
+						url: downloadUrl,
+					}),
+					button({
+						label: "New Search",
+						style: BUTTON_SECONDARY,
+						customId: await buildWorkflowCustomId(
+							{ ...workflowPayload, action: "new-search" },
+							config.componentSigningSecret as string,
+						),
+					}),
+				),
+			);
+		}
+		const safeDescription = content
+			.replace(/\[Download[^\]]*\]\(https:\/\/[^)]+\)/g, "")
+			.trim();
+		try {
+			await editOriginalResponse(
+				interaction.application_id,
+				interaction.token,
+				{
+					content: "",
+					embeds: [
+						statusEmbed(
+							title,
+							ready
+								? "Ready to download"
+								: processing
+									? "Processing"
+									: "Action needed",
+							{
+								description: safeDescription,
+								color: ready ? 0x57f287 : undefined,
+							},
+						),
+					],
+					components,
+				},
+			);
+		} catch (error) {
+			logDiscordApiFailure("failed to edit interaction response", error);
+		}
+		return;
+	}
 	let progressMessageId: string;
 	try {
 		progressMessageId = await createFollowupMessage(
@@ -579,7 +1006,10 @@ async function addAndAwaitDownload(
 		const title = readiness.torrent
 			? `\n\n${formatTitleLine(readiness.torrent)}`
 			: "";
-		return `${heading}${title}\nTorBox is still processing this torrent (ID \`${torrentId}\`). Use \`/status\` to check it later.`;
+		const progress = readiness.torrent
+			? ` Progress: ${progressPercent(readiness.torrent.progress)}%.`
+			: "";
+		return `${heading}${title}\nTorBox is still processing this torrent.${progress} Use \`/status\` to check it later.`;
 	}
 
 	// 3. Ready: pick the download target and request the temporary link.
@@ -630,9 +1060,18 @@ async function addAndAwaitDownload(
  */
 export async function buildSearchComponents(
 	selectable: readonly TorrentResult[],
-	userId: string,
+	payloadOrUserId: WorkflowComponentPayload | string,
 	signingSecret: string,
 ): Promise<object[] | null> {
+	const payload =
+		typeof payloadOrUserId === "string"
+			? createWorkflowPayload({
+					userId: payloadOrUserId,
+					action: "release",
+					mediaType: "general",
+					queryDigest: await digestComponentQuery(""),
+				})
+			: payloadOrUserId;
 	// Defensive: re-deduplicate in case a caller bypassed the normal path.
 	const seen = new Set<string>();
 	const options: {
@@ -644,11 +1083,11 @@ export async function buildSearchComponents(
 		if (options.length >= SELECT_OPTION_CAP) {
 			break;
 		}
-		const value = result.infoHash;
-		if (typeof value !== "string" || !isValidInfoHash(value)) {
+		const infoHash = result.infoHash;
+		if (typeof infoHash !== "string" || !isValidInfoHash(infoHash)) {
 			continue;
 		}
-		const key = value.toLowerCase();
+		const key = infoHash.toLowerCase();
 		if (seen.has(key)) {
 			continue;
 		}
@@ -661,10 +1100,12 @@ export async function buildSearchComponents(
 		if (label.length > DISCORD_ID_LIMIT) {
 			throw new Error("select option label exceeds Discord 100-char limit");
 		}
-		if (value.length > DISCORD_ID_LIMIT) {
-			throw new Error("select option value exceeds Discord 100-char limit");
-		}
-		const description = formatResultDescription(result);
+		const signature = await signPayload(
+			releaseSigningInput(infoHash, payload),
+			signingSecret,
+		);
+		const value = `${infoHash}.${signature}`;
+		const description = releaseOptionDescription(result);
 		options.push({
 			label,
 			value,
@@ -678,8 +1119,7 @@ export async function buildSearchComponents(
 
 	// Build a signed custom_id for this search. The payload binds the
 	// interaction to the original requester and includes an expiry.
-	const payload = createPayload(userId, ""); // hash not needed in custom_id
-	const customId = await buildCustomId(payload, signingSecret);
+	const customId = await buildWorkflowCustomId(payload, signingSecret);
 
 	// Fail-safe invariant checks before sending to Discord.
 	if (customId.length > DISCORD_ID_LIMIT) {
@@ -692,7 +1132,7 @@ export async function buildSearchComponents(
 		throw new Error("search select exceeds feature option cap");
 	}
 
-	return [
+	const rows: object[] = [
 		{
 			type: 1, // ActionRow
 			components: [
@@ -705,4 +1145,81 @@ export async function buildSearchComponents(
 			],
 		},
 	];
+	const navigation: object[] = [];
+	if (payload.mediaType !== "general" && payload.mediaId > 0) {
+		navigation.push(
+			button({
+				label: "Back",
+				style: BUTTON_SECONDARY,
+				customId: await buildWorkflowCustomId(
+					{ ...payload, action: "back-details" },
+					signingSecret,
+				),
+			}),
+		);
+	}
+	navigation.push(
+		button({
+			label: "Cancel",
+			style: BUTTON_DANGER,
+			customId: await buildWorkflowCustomId(
+				{ ...payload, action: "cancel" },
+				signingSecret,
+			),
+		}),
+	);
+	rows.push(actionRow(...navigation));
+	return rows;
+}
+
+function releaseSigningInput(
+	hash: string,
+	payload: WorkflowComponentPayload,
+): string {
+	return [
+		hash.toLowerCase(),
+		payload.userId,
+		payload.mediaType,
+		String(payload.mediaId),
+		payload.seasonNumber === null ? "n" : String(payload.seasonNumber),
+		payload.queryDigest,
+		String(Math.floor(payload.expiry / 1000)),
+	].join(":");
+}
+
+async function extractReleaseHash(
+	interaction: DiscordInteraction,
+	payload: WorkflowComponentPayload,
+	secret: string,
+): Promise<string | null> {
+	const selected = (interaction.data as ComponentData | undefined)?.values;
+	if (!selected || selected.length !== 1) {
+		return null;
+	}
+	const separator = selected[0].lastIndexOf(".");
+	if (separator !== 40) {
+		return null;
+	}
+	const hash = selected[0].slice(0, separator);
+	const signature = selected[0].slice(separator + 1);
+	if (
+		!isValidInfoHash(hash) ||
+		!/^[A-Za-z0-9_-]{22}$/.test(signature) ||
+		!(await verifySignature(
+			releaseSigningInput(hash, payload),
+			signature,
+			secret,
+		))
+	) {
+		return null;
+	}
+	const visibleValues: string[] = [];
+	for (const row of interaction.message?.components ?? []) {
+		for (const component of row.components ?? []) {
+			for (const option of component.options ?? []) {
+				visibleValues.push(option.value);
+			}
+		}
+	}
+	return visibleValues.includes(selected[0]) ? hash : null;
 }

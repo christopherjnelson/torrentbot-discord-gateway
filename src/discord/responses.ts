@@ -65,7 +65,11 @@ export function messageResponse(content: string, ephemeral = false): Response {
  * was attached to (e.g. removing the search select menu after a selection).
  * The user sees no loading state. Only valid for component interactions.
  */
-export function updateMessageResponse(data: { components?: object[] }): Response {
+export function updateMessageResponse(data: {
+	content?: string;
+	embeds?: object[];
+	components?: object[];
+}): Response {
 	return json({
 		type: CALLBACK_UPDATE_MESSAGE,
 		data: { ...data, allowed_mentions: NO_MENTIONS },

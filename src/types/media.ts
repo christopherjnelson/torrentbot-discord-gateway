@@ -21,8 +21,18 @@ export interface TvSeasonSummary {
 	episodeCount: number | null;
 }
 
-/** TV details add only the season fields needed by the selection workflow. */
-export interface TvDetails extends MediaSearchResult {
+/** Trusted, bounded metadata displayed on a selected-media card. */
+export interface MediaDetails extends MediaSearchResult {
+	overview: string | null;
+	posterPath: string | null;
+	genres: readonly string[];
+	runtimeMinutes: number | null;
+	episodeRunTimeMinutes: number | null;
+	status: string | null;
+}
+
+/** TV details add the season fields needed by the selection workflow. */
+export interface TvDetails extends MediaDetails {
 	mediaType: "tv";
-	seasons: TvSeasonSummary[];
+	seasons: readonly TvSeasonSummary[];
 }

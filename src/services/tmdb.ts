@@ -1,5 +1,6 @@
 import type {
 	MediaSearchResult,
+	MediaDetails,
 	MediaType,
 	TvDetails,
 	TvSeasonSummary,
@@ -33,6 +34,11 @@ export const TMDB_SEARCH_RESULT_CAP = 10;
 const TMDB_MAX_PARSED_RESULTS = 50;
 const TMDB_MAX_QUERY_LENGTH = 200;
 const TMDB_MAX_TITLE_LENGTH = 200;
+const TMDB_MAX_OVERVIEW_LENGTH = 1_000;
+const TMDB_MAX_GENRES = 5;
+const TMDB_MAX_GENRE_LENGTH = 50;
+const TMDB_MAX_STATUS_LENGTH = 80;
+const POSTER_PATH_PATTERN = /^\/[A-Za-z0-9_-]+\.(?:jpe?g|png|webp)$/i;
 
 export interface TmdbOptions {
 	readAccessToken: string;
@@ -95,6 +101,95 @@ function normalizeNonNegativeInt(value: unknown): number | null {
 		value >= 0
 		? value
 		: null;
+}
+
+function normalizePositiveInt(value: unknown): number | null {
+	return typeof value === "number" &&
+		Number.isSafeInteger(value) &&
+		value > 0
+		? value
+		: null;
+}
+
+function normalizeBoundedText(value: unknown, limit: number): string | null {
+	if (typeof value !== "string") {
+		return null;
+	}
+	let cleaned = "";
+	for (const character of value) {
+		const code = character.codePointAt(0) ?? 0;
+		cleaned += code < 32 || code === 127 ? " " : character;
+	}
+	cleaned = cleaned.replace(/\s+/g, " ").trim();
+	return cleaned
+		? Array.from(cleaned).slice(0, limit).join("").trim() || null
+		: null;
+}
+
+function normalizePosterPath(value: unknown): string | null {
+	return typeof value === "string" && POSTER_PATH_PATTERN.test(value)
+		? value
+		: null;
+}
+
+function normalizeGenres(value: unknown): string[] {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+	const genres: string[] = [];
+	const seen = new Set<string>();
+	for (const entry of value) {
+		if (!isRecord(entry)) {
+			continue;
+		}
+		const name = normalizeBoundedText(entry.name, TMDB_MAX_GENRE_LENGTH);
+		const key = name?.toLocaleLowerCase();
+		if (!name || !key || seen.has(key)) {
+			continue;
+		}
+		seen.add(key);
+		genres.push(name);
+		if (genres.length >= TMDB_MAX_GENRES) {
+			break;
+		}
+	}
+	return genres;
+}
+
+function normalizeEpisodeRuntime(value: unknown): number | null {
+	if (!Array.isArray(value)) {
+		return null;
+	}
+	for (const entry of value) {
+		const runtime = normalizePositiveInt(entry);
+		if (runtime !== null) {
+			return runtime;
+		}
+	}
+	return null;
+}
+
+function normalizeDetails(
+	value: unknown,
+	mediaType: MediaType,
+): MediaDetails | null {
+	const media = normalizeMedia(value, mediaType);
+	if (!media || !isRecord(value)) {
+		return null;
+	}
+	return {
+		...media,
+		overview: normalizeBoundedText(value.overview, TMDB_MAX_OVERVIEW_LENGTH),
+		posterPath: normalizePosterPath(value.poster_path),
+		genres: normalizeGenres(value.genres),
+		runtimeMinutes:
+			mediaType === "movie" ? normalizePositiveInt(value.runtime) : null,
+		episodeRunTimeMinutes:
+			mediaType === "tv"
+				? normalizeEpisodeRuntime(value.episode_run_time)
+				: null,
+		status: normalizeBoundedText(value.status, TMDB_MAX_STATUS_LENGTH),
+	};
 }
 
 function normalizeYear(value: unknown): number | null {
@@ -252,7 +347,7 @@ export function getTmdbDetails(
 	mediaType: "movie",
 	id: number,
 	options: TmdbOptions,
-): Promise<MediaSearchResult>;
+): Promise<MediaDetails>;
 export function getTmdbDetails(
 	mediaType: "tv",
 	id: number,
@@ -262,13 +357,13 @@ export async function getTmdbDetails(
 	mediaType: MediaType,
 	id: number,
 	options: TmdbOptions,
-): Promise<MediaSearchResult | TvDetails> {
+): Promise<MediaDetails | TvDetails> {
 	if (!Number.isSafeInteger(id) || id <= 0) {
 		throw new UserInputError("Invalid TMDB media ID");
 	}
 	const url = buildUrl(`${mediaType}/${id}`);
 	const parsed = await requestJson(url, options);
-	const normalized = normalizeMedia(parsed, mediaType);
+	const normalized = normalizeDetails(parsed, mediaType);
 	if (!normalized || normalized.id !== id) {
 		throw new UpstreamParseError(
 			TMDB_SERVICE,

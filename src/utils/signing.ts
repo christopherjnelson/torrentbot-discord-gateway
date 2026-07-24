@@ -21,6 +21,7 @@
 export const CUSTOM_ID_PREFIX = "tb:a:";
 export const MEDIA_CUSTOM_ID_PREFIX = "tb:m:";
 export const SEASON_CUSTOM_ID_PREFIX = "tb:s:";
+export const WORKFLOW_CUSTOM_ID_PREFIX = "tb:w:";
 export const SEPARATOR = ":";
 export const EXPIRY_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 
@@ -62,6 +63,51 @@ export interface SeasonComponentPayload {
 	page: number;
 	queryDigest: string;
 }
+
+export type WorkflowAction =
+	| "movie-search"
+	| "tv-complete"
+	| "tv-specials"
+	| "exact"
+	| "back-results"
+	| "back-details"
+	| "cancel"
+	| "previous"
+	| "next"
+	| "release"
+	| "new-search"
+	| "season";
+
+export interface WorkflowComponentPayload {
+	action: WorkflowAction;
+	userId: string;
+	infoHash: "";
+	expiry: number;
+	mediaType: "general" | "movie" | "tv";
+	mediaId: number;
+	seasonNumber: number | null;
+	page: number;
+	queryDigest: string;
+}
+
+const WORKFLOW_ACTION_CODES: Record<WorkflowAction, string> = {
+	"movie-search": "mr",
+	"tv-complete": "tc",
+	"tv-specials": "ts",
+	exact: "ex",
+	"back-results": "br",
+	"back-details": "bd",
+	cancel: "ca",
+	previous: "pv",
+	next: "nx",
+	release: "rl",
+	"new-search": "ns",
+	season: "sn",
+};
+
+const WORKFLOW_ACTIONS_BY_CODE = Object.fromEntries(
+	Object.entries(WORKFLOW_ACTION_CODES).map(([action, code]) => [code, action]),
+) as Record<string, WorkflowAction>;
 
 /**
  * Build the plaintext payload string from a ComponentPayload.
@@ -183,7 +229,11 @@ export async function parseAndVerifyCustomId(
 	customId: string,
 	secret: string,
 ): Promise<
-	ComponentPayload | MediaComponentPayload | SeasonComponentPayload | null
+	| ComponentPayload
+	| MediaComponentPayload
+	| SeasonComponentPayload
+	| WorkflowComponentPayload
+	| null
 > {
 	const prefix = customId.startsWith(CUSTOM_ID_PREFIX)
 		? CUSTOM_ID_PREFIX
@@ -191,6 +241,8 @@ export async function parseAndVerifyCustomId(
 			? MEDIA_CUSTOM_ID_PREFIX
 			: customId.startsWith(SEASON_CUSTOM_ID_PREFIX)
 				? SEASON_CUSTOM_ID_PREFIX
+				: customId.startsWith(WORKFLOW_CUSTOM_ID_PREFIX)
+					? WORKFLOW_CUSTOM_ID_PREFIX
 				: null;
 	if (!prefix) {
 		return null;
@@ -214,7 +266,9 @@ export async function parseAndVerifyCustomId(
 			? decodePayload(payload)
 			: prefix === MEDIA_CUSTOM_ID_PREFIX
 				? decodeMediaPayload(payload)
-				: decodeSeasonPayload(payload);
+				: prefix === SEASON_CUSTOM_ID_PREFIX
+					? decodeSeasonPayload(payload)
+					: decodeWorkflowPayload(payload);
 	if (!parsed) {
 		return null;
 	}
@@ -223,6 +277,113 @@ export async function parseAndVerifyCustomId(
 		return null; // expired
 	}
 	return parsed;
+}
+
+function encodeWorkflowPayload(payload: WorkflowComponentPayload): string {
+	const expirySeconds = Math.floor(payload.expiry / 1000);
+	const mediaCode =
+		payload.mediaType === "general"
+			? "g"
+			: payload.mediaType === "movie"
+				? "m"
+				: "t";
+	return [
+		payload.userId,
+		String(expirySeconds),
+		WORKFLOW_ACTION_CODES[payload.action],
+		mediaCode,
+		String(payload.mediaId),
+		payload.seasonNumber === null ? "n" : String(payload.seasonNumber),
+		String(payload.page),
+		payload.queryDigest,
+	].join(SEPARATOR);
+}
+
+function decodeWorkflowPayload(raw: string): WorkflowComponentPayload | null {
+	const parts = raw.split(SEPARATOR);
+	if (parts.length !== 8) {
+		return null;
+	}
+	const [
+		userId,
+		expiryRaw,
+		actionCode,
+		mediaCode,
+		mediaIdRaw,
+		seasonRaw,
+		pageRaw,
+		queryDigest,
+	] = parts;
+	const expiry = Number(expiryRaw);
+	const mediaId = Number(mediaIdRaw);
+	const page = Number(pageRaw);
+	const seasonNumber = seasonRaw === "n" ? null : Number(seasonRaw);
+	const action = WORKFLOW_ACTIONS_BY_CODE[actionCode];
+	if (
+		!userId ||
+		!action ||
+		!["g", "m", "t"].includes(mediaCode) ||
+		!Number.isSafeInteger(expiry) ||
+		expiry <= 0 ||
+		!Number.isSafeInteger(mediaId) ||
+		mediaId < 0 ||
+		!Number.isSafeInteger(page) ||
+		page < 0 ||
+		(seasonNumber !== null &&
+			(!Number.isSafeInteger(seasonNumber) || seasonNumber < -1)) ||
+		!/^[A-Za-z0-9_-]{16}$/.test(queryDigest)
+	) {
+		return null;
+	}
+	return {
+		action,
+		userId,
+		infoHash: "",
+		expiry: expiry * 1000,
+		mediaType:
+			mediaCode === "g" ? "general" : mediaCode === "m" ? "movie" : "tv",
+		mediaId,
+		seasonNumber,
+		page,
+		queryDigest,
+	};
+}
+
+export async function buildWorkflowCustomId(
+	payload: WorkflowComponentPayload,
+	secret: string,
+): Promise<string> {
+	const encoded = encodeWorkflowPayload(payload);
+	const signature = await signPayload(encoded, secret);
+	const customId =
+		`${WORKFLOW_CUSTOM_ID_PREFIX}${encoded}${SEPARATOR}${signature}`;
+	if (customId.length > DISCORD_ID_LIMIT) {
+		throw new Error("generated workflow custom_id exceeds Discord limit");
+	}
+	return customId;
+}
+
+export function createWorkflowPayload(params: {
+	userId: string;
+	action: WorkflowAction;
+	mediaType: "general" | "movie" | "tv";
+	mediaId?: number;
+	seasonNumber?: number | null;
+	page?: number;
+	queryDigest: string;
+	expiry?: number;
+}): WorkflowComponentPayload {
+	return {
+		userId: params.userId,
+		infoHash: "",
+		action: params.action,
+		mediaType: params.mediaType,
+		mediaId: params.mediaId ?? 0,
+		seasonNumber: params.seasonNumber ?? null,
+		page: params.page ?? 0,
+		queryDigest: params.queryDigest,
+		expiry: params.expiry ?? Date.now() + EXPIRY_WINDOW_MS,
+	};
 }
 
 function encodeSeasonPayload(payload: SeasonComponentPayload): string {

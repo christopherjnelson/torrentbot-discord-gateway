@@ -34,6 +34,10 @@ export interface ComponentData {
 
 export interface MessageComponent {
 	type: number;
+	custom_id?: string;
+	label?: string;
+	style?: number;
+	url?: string;
 	value?: string;
 	options?: Array<{ value: string }>;
 	components?: MessageComponent[];
@@ -41,6 +45,11 @@ export interface MessageComponent {
 
 export interface InteractionMessage {
 	content?: string;
+	embeds?: Array<{
+		title?: string;
+		description?: string;
+		footer?: { text?: string };
+	}>;
 	components?: MessageComponent[];
 }
 
@@ -97,6 +106,10 @@ function parseMessageComponent(value: unknown): MessageComponent | null {
 		return null;
 	}
 	const component: MessageComponent = { type: value.type };
+	if (typeof value.custom_id === "string") component.custom_id = value.custom_id;
+	if (typeof value.label === "string") component.label = value.label;
+	if (typeof value.style === "number") component.style = value.style;
+	if (typeof value.url === "string") component.url = value.url;
 	if (value.value !== undefined) {
 		if (typeof value.value !== "string") {
 			return null;
@@ -189,6 +202,25 @@ export function parseInteraction(raw: unknown): DiscordInteraction | null {
 				return null;
 			}
 			message.content = raw.message.content;
+		}
+		if (raw.message.embeds !== undefined) {
+			if (!Array.isArray(raw.message.embeds)) {
+				return null;
+			}
+			message.embeds = raw.message.embeds
+				.filter(isRecord)
+				.map((embed) => ({
+					...(typeof embed.title === "string"
+						? { title: embed.title }
+						: {}),
+					...(typeof embed.description === "string"
+						? { description: embed.description }
+						: {}),
+					...(isRecord(embed.footer) &&
+					typeof embed.footer.text === "string"
+						? { footer: { text: embed.footer.text } }
+						: {}),
+				}));
 		}
 		if (raw.message.components !== undefined) {
 			if (!Array.isArray(raw.message.components)) {

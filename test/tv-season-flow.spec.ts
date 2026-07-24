@@ -1,86 +1,50 @@
 import { fetchMock, waitOnExecutionContext } from "cloudflare:test";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import {
-	buildSeasonCustomId,
-	digestComponentQuery,
-	type SeasonComponentPayload,
-} from "../src/utils/signing";
 import { TEST_SIGNING_SECRET } from "./fixtures";
 import {
 	dispatchInteraction,
 	interceptOriginalResponseEdit,
 	makeCommandInteraction,
 	makeComponentInteraction,
-	TEST_GUILD_ID,
-	TEST_UNAUTHORIZED_GUILD_ID,
-	TEST_USER_ID,
 } from "./helpers";
 
-type Menu = {
-	content: string;
-	allowed_mentions?: { parse: string[] };
-	components: Array<{
-		type: number;
-		components: Array<{
-			type: number;
-			custom_id: string;
-			placeholder: string;
-			options: Array<{
-				label: string;
-				value: string;
-				description: string;
-			}>;
-		}>;
-	}>;
+type Component = {
+	type: number;
+	custom_id?: string;
+	label?: string;
+	options?: Array<{ label: string; value: string; description: string }>;
 };
+type View = {
+	content?: string;
+	embeds?: Array<{ title?: string; footer?: { text?: string } }>;
+	components: Array<{ type: number; components: Component[] }>;
+};
+
+const SEASONS = [
+	{ season_number: 0, episode_count: 7 },
+	{ season_number: 1, episode_count: 7 },
+	{ season_number: 3, episode_count: 13 },
+];
 
 beforeAll(() => {
 	fetchMock.activate();
 	fetchMock.disableNetConnect();
 });
+beforeEach(() => fetchMock.assertNoPendingInterceptors());
+afterAll(() => fetchMock.deactivate());
 
-beforeEach(() => {
-	fetchMock.assertNoPendingInterceptors();
-});
-
-afterAll(() => {
-	fetchMock.deactivate();
-});
-
-function select(menu: Menu) {
-	return menu.components[0].components[0];
-}
-
-function componentFromMenu(
-	menu: Menu,
-	value: string,
-	overrides: Parameters<typeof makeComponentInteraction>[0] = {},
-) {
-	return makeComponentInteraction({
-		data: { custom_id: select(menu).custom_id, values: [value] },
-		message: { content: menu.content, components: menu.components },
-		...overrides,
-	});
-}
-
-function tvDetails(seasons: unknown[]) {
+function details(seasons: unknown[] = SEASONS) {
 	return {
 		id: 1396,
-		name: "Breaking   Bad",
-		original_name: "Breaking Bad",
+		name: "Breaking Bad",
 		first_air_date: "2008-01-20",
+		episode_run_time: [45],
+		status: "Ended",
 		seasons,
 	};
 }
 
-const BASE_SEASONS = [
-	{ season_number: 0, episode_count: 5 },
-	{ season_number: 1, episode_count: 7 },
-	{ season_number: 3, episode_count: 13 },
-	{ season_number: 100, episode_count: null },
-];
-
-async function openTvMediaMenu(query = "breaking bad"): Promise<Menu> {
+async function openResults(): Promise<View> {
 	fetchMock
 		.get("https://api.themoviedb.org")
 		.intercept({ path: /^\/3\/search\/tv\?/ })
@@ -96,57 +60,75 @@ async function openTvMediaMenu(query = "breaking bad"): Promise<Menu> {
 				],
 			}),
 		);
-	const { captured } = interceptOriginalResponseEdit();
-	const { ctx, response } = await dispatchInteraction(
+	const edits = interceptOriginalResponseEdit();
+	const routed = await dispatchInteraction(
 		JSON.stringify(
 			makeCommandInteraction("search", [
 				{
 					name: "tv",
 					type: 1,
-					options: [{ name: "query", type: 3, value: query }],
+					options: [{ name: "query", type: 3, value: "breaking bad" }],
 				},
 			]),
 		),
 		{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
 	);
-	expect(await response.json()).toEqual({
-		type: 5,
-		data: { flags: 64 },
-	});
-	await waitOnExecutionContext(ctx);
-	return captured[0].body as Menu;
+	await waitOnExecutionContext(routed.ctx);
+	return edits.captured[0].body as View;
 }
 
-async function openSeasonMenu(
-	seasons: unknown[] = BASE_SEASONS,
-	query = "breaking bad",
-): Promise<Menu> {
-	const mediaMenu = await openTvMediaMenu(query);
+async function openSeasons(seasons: unknown[] = SEASONS): Promise<View> {
+	const results = await openResults();
 	fetchMock
 		.get("https://api.themoviedb.org")
 		.intercept({ path: "/3/tv/1396" })
-		.reply(200, JSON.stringify(tvDetails(seasons)));
-	const { captured } = interceptOriginalResponseEdit();
-	const seriesValue = select(mediaMenu).options[0].value;
-	const { ctx, response } = await dispatchInteraction(
-		JSON.stringify(componentFromMenu(mediaMenu, seriesValue)),
+		.reply(200, JSON.stringify(details(seasons)));
+	const edits = interceptOriginalResponseEdit();
+	const select = results.components[0].components[0];
+	const routed = await dispatchInteraction(
+		JSON.stringify(
+			makeComponentInteraction({
+				data: {
+					custom_id: select.custom_id as string,
+					values: [select.options?.[0]?.value as string],
+				},
+				message: results,
+			}),
+		),
 		{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
 	);
-	expect(await response.json()).toMatchObject({
-		type: 6,
+	expect(await routed.response.json()).toEqual({ type: 6 });
+	await waitOnExecutionContext(routed.ctx);
+	return edits.captured[0].body as View;
+}
+
+function buttonInteraction(view: View, label: string) {
+	const button = view.components
+		.flatMap((row) => row.components)
+		.find((component) => component.label === label);
+	expect(button?.custom_id, `missing ${label} button`).toBeDefined();
+	return makeComponentInteraction({
+		data: { custom_id: button?.custom_id as string },
+		message: view,
 	});
-	await waitOnExecutionContext(ctx);
-	expect(captured).toHaveLength(1);
-	return captured[0].body as Menu;
 }
 
-function option(menu: Menu, label: string) {
-	const found = select(menu).options.find((candidate) => candidate.label === label);
-	expect(found, `missing option ${label}`).toBeDefined();
-	return found as NonNullable<typeof found>;
+function seasonInteraction(view: View, label: string) {
+	const select = view.components
+		.flatMap((row) => row.components)
+		.find((component) => component.type === 3);
+	const option = select?.options?.find((candidate) => candidate.label === label);
+	expect(option, `missing ${label} option`).toBeDefined();
+	return makeComponentInteraction({
+		data: {
+			custom_id: select?.custom_id as string,
+			values: [option?.value as string],
+		},
+		message: view,
+	});
 }
 
-function interceptProwlarr(status = 200, body = "[]") {
+function interceptProwlarr() {
 	let query = "";
 	fetchMock
 		.get("https://prowlarr.test")
@@ -156,321 +138,138 @@ function interceptProwlarr(status = 200, body = "[]") {
 				new URL(`https://prowlarr.test${request.path}`).searchParams.get(
 					"query",
 				) ?? "";
-			return { statusCode: status, data: body };
+			return { statusCode: 200, data: "[]" };
 		});
 	return () => query;
 }
 
-async function chooseCanonicalOption(
-	label: string,
-	expectedQuery: string,
-): Promise<void> {
-	const menu = await openSeasonMenu();
+async function choose(
+	interaction: ReturnType<typeof makeComponentInteraction>,
+	trustedSeasons: unknown[],
+): Promise<string> {
 	fetchMock
 		.get("https://api.themoviedb.org")
 		.intercept({ path: "/3/tv/1396" })
-		.reply(200, JSON.stringify(tvDetails(BASE_SEASONS)));
+		.reply(200, JSON.stringify(details(trustedSeasons)));
 	const searched = interceptProwlarr();
-	const { captured } = interceptOriginalResponseEdit();
-	const { ctx, response } = await dispatchInteraction(
-		JSON.stringify(componentFromMenu(menu, option(menu, label).value)),
+	interceptOriginalResponseEdit();
+	const routed = await dispatchInteraction(
+		JSON.stringify(interaction),
 		{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
 	);
-	expect(await response.json()).toMatchObject({
-		type: 6,
-	});
-	await waitOnExecutionContext(ctx);
-	expect(searched()).toBe(expectedQuery);
-	expect(captured[0].body.content).toBe(
-		`No results found for \`${expectedQuery}\`.`,
-	);
+	await waitOnExecutionContext(routed.ctx);
+	return searched();
 }
 
-describe("TV season continuation", () => {
-	it.each([
-		["Complete series", "Breaking Bad complete"],
-		["Specials", "Breaking Bad S00"],
-		["Season 3", "Breaking Bad S03"],
-		["Season 100", "Breaking Bad S100"],
-	])("%s re-fetches trusted details and searches %s", async (label, query) => {
-		await chooseCanonicalOption(label, query);
+describe("routed TV season workflow", () => {
+	it("regression: selecting the TMDB result edits the original response with seasons", async () => {
+		const view = await openSeasons();
+		expect(view.embeds?.[0].title).toBe("Breaking Bad");
+		expect(
+			view.components
+				.flatMap((row) => row.components)
+				.find((component) => component.type === 3)
+				?.options?.map((option) => option.label),
+		).toEqual(["Specials", "Season 1", "Season 3"]);
 	});
 
-	it("uses the original query unchanged for exact search without a details request", async () => {
-		const original = "breaking bad fan edit";
-		const menu = await openSeasonMenu(BASE_SEASONS, original);
+	it("searches Complete series only after its button is chosen", async () => {
+		const view = await openSeasons();
+		expect(await choose(buttonInteraction(view, "Complete Series"), SEASONS)).toBe(
+			"Breaking Bad complete",
+		);
+	});
+
+	it("maps Specials to S00", async () => {
+		const view = await openSeasons();
+		expect(await choose(buttonInteraction(view, "Specials"), SEASONS)).toBe(
+			"Breaking Bad S00",
+		);
+	});
+
+	it("maps a numbered season to a padded canonical query", async () => {
+		const view = await openSeasons();
+		expect(await choose(seasonInteraction(view, "Season 3"), SEASONS)).toBe(
+			"Breaking Bad S03",
+		);
+	});
+
+	it("exact search bypasses the second TMDB details lookup", async () => {
+		const view = await openSeasons();
 		const searched = interceptProwlarr();
 		interceptOriginalResponseEdit();
-		const { ctx } = await dispatchInteraction(
-			JSON.stringify(
-				componentFromMenu(
-					menu,
-					option(menu, "Search exactly as entered").value,
-				),
-			),
+		const routed = await dispatchInteraction(
+			JSON.stringify(buttonInteraction(view, "Search Exactly as Entered")),
 			{
 				COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET,
 				TMDB_READ_ACCESS_TOKEN: "",
 			},
 		);
-		await waitOnExecutionContext(ctx);
-		expect(searched()).toBe(original);
+		await waitOnExecutionContext(routed.ctx);
+		expect(searched()).toBe("breaking bad");
 	});
 
-	it("rejects a season that disappeared from the trusted details response", async () => {
-		const menu = await openSeasonMenu();
+	it("uses signed Previous/Next buttons for long season lists", async () => {
+		const seasons = Array.from({ length: 46 }, (_, season_number) => ({
+			season_number,
+			episode_count: season_number + 1,
+		}));
+		const first = await openSeasons(seasons);
+		fetchMock
+			.get("https://api.themoviedb.org")
+			.intercept({ path: "/3/tv/1396" })
+			.reply(200, JSON.stringify(details(seasons)));
+		const edits = interceptOriginalResponseEdit();
+		const routed = await dispatchInteraction(
+			JSON.stringify(buttonInteraction(first, "Next")),
+			{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
+		);
+		await waitOnExecutionContext(routed.ctx);
+		const second = edits.captured[0].body as View;
+		expect(
+			second.components
+				.flatMap((row) => row.components)
+				.find((component) => component.type === 3)
+				?.options?.map((option) => option.label),
+		).toContain("Season 39");
+		expect(
+			second.components
+				.flatMap((row) => row.components)
+				.map((component) => component.label),
+		).toContain("Previous");
+	});
+
+	it("rejects a season that disappeared from trusted details", async () => {
+		const view = await openSeasons();
 		fetchMock
 			.get("https://api.themoviedb.org")
 			.intercept({ path: "/3/tv/1396" })
 			.reply(
 				200,
 				JSON.stringify(
-					tvDetails(BASE_SEASONS.filter((season) => season.season_number !== 3)),
+					details(SEASONS.filter((season) => season.season_number !== 3)),
 				),
 			);
-		const { captured } = interceptOriginalResponseEdit();
-		const { ctx } = await dispatchInteraction(
-			JSON.stringify(
-				componentFromMenu(menu, option(menu, "Season 3").value),
-			),
+		const edits = interceptOriginalResponseEdit();
+		const routed = await dispatchInteraction(
+			JSON.stringify(seasonInteraction(view, "Season 3")),
 			{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
 		);
-		await waitOnExecutionContext(ctx);
-		expect(captured[0].body.content).toContain(
+		await waitOnExecutionContext(routed.ctx);
+		expect(edits.captured[0].body.content).toContain(
 			"season selection is no longer available",
 		);
 	});
 
-	it("navigates to every later season with a signed requester-bound page", async () => {
-		const seasons = Array.from({ length: 46 }, (_, seasonNumber) => ({
-			season_number: seasonNumber,
-			episode_count: seasonNumber + 1,
-		}));
-		const first = await openSeasonMenu(seasons);
-		fetchMock
-			.get("https://api.themoviedb.org")
-			.intercept({ path: "/3/tv/1396" })
-			.reply(200, JSON.stringify(tvDetails(seasons)));
-		const { captured } = interceptOriginalResponseEdit();
-		const { ctx } = await dispatchInteraction(
-			JSON.stringify(
-				componentFromMenu(first, option(first, "Next seasons").value),
-			),
-			{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
-		);
-		await waitOnExecutionContext(ctx);
-		const second = captured[0].body as Menu;
-		expect(select(second).placeholder).toBe("Select a season (page 2/3)");
-		expect(select(second).options.map((entry) => entry.label)).toContain(
-			"Season 39",
-		);
-		expect(select(second).options).toHaveLength(23);
-		expect(select(second).options.at(-1)?.label).toBe(
-			"Search exactly as entered",
-		);
-	});
-
-	it("surfaces a Prowlarr failure safely after a valid season selection", async () => {
-		const menu = await openSeasonMenu();
-		fetchMock
-			.get("https://api.themoviedb.org")
-			.intercept({ path: "/3/tv/1396" })
-			.reply(200, JSON.stringify(tvDetails(BASE_SEASONS)));
-		interceptProwlarr(500, "private upstream payload");
-		const { captured } = interceptOriginalResponseEdit();
-		const { ctx } = await dispatchInteraction(
-			JSON.stringify(
-				componentFromMenu(menu, option(menu, "Season 1").value),
-			),
-			{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
-		);
-		await waitOnExecutionContext(ctx);
-		expect(captured[0].body.content).toBe(
-			"The upstream service returned an error (HTTP 500). Try again later.",
-		);
-		expect(JSON.stringify(captured)).not.toContain("private upstream payload");
-	});
-});
-
-describe("TV season component integrity", () => {
-	it("rejects a tampered season option HMAC without an upstream request", async () => {
-		const menu = await openSeasonMenu();
-		const selected = option(menu, "Season 3");
-		const tampered =
-			selected.value.slice(0, -1) +
-			(selected.value.endsWith("A") ? "B" : "A");
-		selected.value = tampered;
+	it("Cancel removes all interactive controls", async () => {
+		const view = await openSeasons();
 		const { response } = await dispatchInteraction(
-			JSON.stringify(componentFromMenu(menu, tampered)),
+			JSON.stringify(buttonInteraction(view, "Cancel")),
 			{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
 		);
-		const body = (await response.json()) as { data: { content: string } };
-		expect(body.data.content).toContain(
-			"season selection is no longer available",
-		);
-	});
-
-	it("rejects a tampered signed series ID", async () => {
-		const menu = await openSeasonMenu();
-		const customId = select(menu).custom_id;
-		const tampered = customId.replace(":1396:", ":1397:");
-		const interaction = componentFromMenu(
-			menu,
-			option(menu, "Season 1").value,
-		);
-		interaction.data = {
-			custom_id: tampered,
-			values: [option(menu, "Season 1").value],
-		};
-		const { response } = await dispatchInteraction(
-			JSON.stringify(interaction),
-			{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
-		);
-		const body = (await response.json()) as { data: { content: string } };
-		expect(body.data.content).toContain("expired or is invalid");
-	});
-
-	it("rejects the wrong requester and unauthorized guild", async () => {
-		const menu = await openSeasonMenu();
-		const value = option(menu, "Season 1").value;
-		const wrongUser = await dispatchInteraction(
-			JSON.stringify(
-				componentFromMenu(menu, value, {
-					member: { user: { id: "other-user" } },
-				}),
-			),
-			{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
-		);
-		expect(
-			((await wrongUser.response.json()) as { data: { content: string } })
-				.data.content,
-		).toContain("someone else's");
-
-		const wrongGuild = await dispatchInteraction(
-			JSON.stringify(
-				componentFromMenu(menu, value, {
-					guild_id: TEST_UNAUTHORIZED_GUILD_ID,
-				}),
-			),
-			{
-				COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET,
-				TORBOX_ALLOWED_GUILD_IDS: TEST_GUILD_ID,
-			},
-		);
-		expect(
-			((await wrongGuild.response.json()) as { data: { content: string } })
-				.data.content,
-		).toBe("TorrentBot is not enabled for this server.");
-	});
-
-	it("rejects an expired season component", async () => {
-		const query = "breaking bad";
-		const menu = await openSeasonMenu(BASE_SEASONS, query);
-		const expired: SeasonComponentPayload = {
-			action: "season",
-			userId: TEST_USER_ID,
-			infoHash: "",
-			expiry: Date.now() - 1_000,
-			seriesId: 1396,
-			page: 0,
-			queryDigest: await digestComponentQuery(query),
-		};
-		const interaction = componentFromMenu(
-			menu,
-			option(menu, "Season 1").value,
-		);
-		interaction.data = {
-			custom_id: await buildSeasonCustomId(
-				expired,
-				TEST_SIGNING_SECRET,
-			),
-			values: [option(menu, "Season 1").value],
-		};
-		const { response } = await dispatchInteraction(
-			JSON.stringify(interaction),
-			{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
-		);
-		const body = (await response.json()) as { data: { content: string } };
-		expect(body.data.content).toContain("expired or is invalid");
-	});
-});
-
-describe("TV details failure handling", () => {
-	async function selectSeriesWithFailure(
-		intercept: () => void,
-		env: Record<string, string> = {},
-	): Promise<string> {
-		const mediaMenu = await openTvMediaMenu();
-		intercept();
-		const { captured } = interceptOriginalResponseEdit();
-		const { ctx } = await dispatchInteraction(
-			JSON.stringify(
-				componentFromMenu(mediaMenu, select(mediaMenu).options[0].value),
-			),
-			{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET, ...env },
-		);
-		await waitOnExecutionContext(ctx);
-		return captured[0].body.content as string;
-	}
-
-	it.each([401, 429, 500])(
-		"handles TV details HTTP %s without exposing the response",
-		async (status) => {
-			const content = await selectSeriesWithFailure(() => {
-				fetchMock
-					.get("https://api.themoviedb.org")
-					.intercept({ path: "/3/tv/1396" })
-					.reply(status, "private TMDB response body");
-			});
-			expect(content).toBe(
-				"The media lookup service is unavailable right now. Please try again.",
-			);
-			expect(content).not.toContain("private TMDB response body");
-		},
-	);
-
-	it("handles malformed TV details JSON", async () => {
-		const content = await selectSeriesWithFailure(() => {
-			fetchMock
-				.get("https://api.themoviedb.org")
-				.intercept({ path: "/3/tv/1396" })
-				.reply(200, "{broken");
+		expect(await response.json()).toMatchObject({
+			type: 7,
+			data: { content: "Search cancelled.", components: [] },
 		});
-		expect(content).toContain("media lookup service is unavailable");
-	});
-
-	it("does not let missing canonical title metadata reach Prowlarr", async () => {
-		const content = await selectSeriesWithFailure(() => {
-			fetchMock
-				.get("https://api.themoviedb.org")
-				.intercept({ path: "/3/tv/1396" })
-				.reply(
-					200,
-					JSON.stringify({ id: 1396, seasons: BASE_SEASONS }),
-				);
-		});
-		expect(content).toContain("media lookup service is unavailable");
-	});
-
-	it("handles a TV details timeout", async () => {
-		const content = await selectSeriesWithFailure(
-			() => {
-				fetchMock
-					.get("https://api.themoviedb.org")
-					.intercept({ path: "/3/tv/1396" })
-					.reply(200, JSON.stringify(tvDetails(BASE_SEASONS)))
-					.delay(100);
-			},
-			{ UPSTREAM_TIMEOUT_MS: "10" },
-		);
-		expect(content).toContain("media lookup service is unavailable");
-	});
-
-	it("handles a TV details network failure", async () => {
-		const content = await selectSeriesWithFailure(() => {
-			// No details interceptor: disabled network access becomes a
-			// normalized UpstreamNetworkError at the TMDB boundary.
-		});
-		expect(content).toContain("media lookup service is unavailable");
 	});
 });

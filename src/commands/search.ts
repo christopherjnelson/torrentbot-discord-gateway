@@ -33,6 +33,19 @@ import {
 import { buildSelectableOptions } from "../utils/selectable";
 import { buildMediaComponents, formatMediaHeading } from "./media";
 import type { MediaType } from "../types/media";
+import {
+	errorEmbed,
+	queryFooter,
+	queryFromFooter,
+	releaseSelectionEmbed,
+	validateMessagePayload,
+	type DiscordMessagePayload,
+} from "../discord/presentation";
+import {
+	createWorkflowPayload,
+	digestComponentQuery,
+	type WorkflowComponentPayload,
+} from "../utils/signing";
 
 export const SEARCH_COMMAND_NAME = "search";
 export const MAX_SEARCH_RESULTS = 10;
@@ -201,12 +214,13 @@ export async function completeSearch(
 	interaction: DiscordInteraction,
 	query: string,
 	config: AppConfig,
+	workflowPayload?: WorkflowComponentPayload,
 ): Promise<void> {
 	// URL/key presence is checked by handleSearchCommand before deferring.
 	const apiKey = config.prowlarrApiKey as string;
 	const baseUrl = config.prowlarrUrl as string;
 
-	let content: string;
+	let message: DiscordMessagePayload;
 	let components: object[] | null = null;
 
 	try {
@@ -216,8 +230,6 @@ export async function completeSearch(
 			timeoutMs: config.upstreamTimeoutMs,
 			limit: PROWLARR_REQUEST_LIMIT,
 		});
-		content = formatSearchResults(query, results);
-
 		// Single authoritative selectable sequence:
 		// Prowlarr results -> valid hashes -> deduplicate by normalized
 		// hash -> remove unusable labels -> continue scanning until ten
@@ -234,30 +246,98 @@ export async function completeSearch(
 		if (config.componentSigningSecret) {
 			const userId = getInvokerId(interaction);
 			if (userId) {
+				const payload =
+					workflowPayload ??
+					createWorkflowPayload({
+						userId,
+						action: "release",
+						mediaType: "general",
+						queryDigest: await digestComponentQuery(query),
+					});
 				components = await buildSearchComponents(
 					selectable,
-					userId,
+					{ ...payload, action: "release" },
 					config.componentSigningSecret,
 				);
 			}
 		}
+		if (selectable.length === 0) {
+			message = {
+				content: formatSearchResults(query, []),
+				embeds: [
+					errorEmbed(
+						"No releases found",
+						"Try another season, use exact search, or refine the title.",
+					),
+				],
+				components: [],
+			};
+		} else {
+			const originalQuery =
+				workflowPayload === undefined
+					? query
+					: queryFromWorkflowSource(interaction, query);
+			message = {
+				content: formatSearchResults(query, selectable),
+				embeds: [
+					releaseSelectionEmbed(
+						releaseLabel(workflowPayload),
+						query,
+						selectable,
+						originalQuery,
+					),
+				],
+				components: components ?? [],
+			};
+		}
 	} catch (error) {
 		logUpstreamFailure("search failed", error);
-		content = upstreamErrorMessage(error);
+		message = {
+			content: upstreamErrorMessage(error),
+			embeds: [errorEmbed("Search unavailable", upstreamErrorMessage(error))],
+			components: [],
+		};
 	}
 
 	try {
+		validateMessagePayload(message);
 		await editOriginalResponse(
 			interaction.application_id,
 			interaction.token,
-			{ content, components: components ?? undefined },
+			message,
 		);
 	} catch (error) {
 		logDiscordApiFailure("failed to edit interaction response", error);
 	}
 }
 
-async function completeMediaLookup(
+function queryFromWorkflowSource(
+	interaction: DiscordInteraction,
+	fallback: string,
+): string {
+	return queryFromFooter(interaction.message?.embeds) ?? fallback;
+}
+
+function releaseLabel(payload: WorkflowComponentPayload | undefined): string {
+	if (!payload || payload.mediaType === "general") {
+		return "General search";
+	}
+	if (payload.mediaType === "movie") {
+		return "Movie releases";
+	}
+	if (payload.seasonNumber === 0) {
+		return "TV series — Specials";
+	}
+	if (payload.seasonNumber === -1) {
+		return "TV series — Complete series";
+	}
+	if (payload.seasonNumber !== null && payload.seasonNumber > 0) {
+		return `TV series — Season ${payload.seasonNumber}`;
+	}
+	return "TV releases";
+}
+
+export async function completeMediaLookup(
 	interaction: DiscordInteraction,
 	mediaType: MediaType,
 	query: string,
@@ -266,6 +346,7 @@ async function completeMediaLookup(
 	const startedAt = Date.now();
 	let content: string;
 	let components: object[] | undefined;
+	let embeds: DiscordMessagePayload["embeds"];
 	try {
 		const results = await searchTmdb(mediaType, query, {
 			readAccessToken: config.tmdbReadAccessToken as string,
@@ -299,6 +380,19 @@ async function completeMediaLookup(
 				userId,
 				config.componentSigningSecret,
 			);
+			embeds = [
+				{
+					title:
+						mediaType === "movie"
+							? "Choose a movie"
+							: "Choose a TV series",
+					description: `${results.length} matching result${
+						results.length === 1 ? "" : "s"
+					}. Select the best match below.`,
+					color: 0x5865f2,
+					footer: queryFooter(query),
+				},
+			];
 		}
 	} catch (error) {
 		logUpstreamFailure("tmdb search failed", error);
@@ -321,7 +415,7 @@ async function completeMediaLookup(
 		await editOriginalResponse(
 			interaction.application_id,
 			interaction.token,
-			{ content, components },
+			{ content, embeds, components: components ?? [] },
 		);
 	} catch (error) {
 		logDiscordApiFailure("failed to edit interaction response", error);
