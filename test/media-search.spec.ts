@@ -135,7 +135,20 @@ describe("guided TMDB media workflow", () => {
 			JSON.stringify(selectInteraction(results)),
 			{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
 		);
-		expect(await response.json()).toEqual({ type: 6 });
+		expect(await response.json()).toMatchObject({
+			type: 7,
+			data: {
+				content: "",
+				embeds: [
+					{
+						title: "Loading movie details",
+						description: "Retrieving the selected title's details.",
+						fields: [{ name: "Status", value: "Loading" }],
+					},
+				],
+				components: [],
+			},
+		});
 		await waitOnExecutionContext(ctx);
 		const card = captured[0].body as View;
 		expect(card.embeds?.[0]).toMatchObject({

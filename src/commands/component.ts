@@ -96,9 +96,8 @@ import {
  * 1. Validate the signed component payload, requester binding, and the
  *    authorized-guild check. Failures answer ephemerally and leave the
  *    search select menu untouched.
- * 2. ACK with UPDATE_MESSAGE (type 7) clearing the components, which removes
- *    the select menu from the search results message without a loading
- *    state.
+ * 2. ACK with UPDATE_MESSAGE (type 7), replacing the controls with a visible
+ *    progress state while asynchronous work continues.
  * 3. In the background: submit to TorBox, run a bounded readiness poll, and
  *    report the outcome in an ephemeral followup message.
  */
@@ -264,7 +263,27 @@ export async function handleComponentInteraction(
 				config,
 			),
 		);
-		return deferredUpdateMessageResponse();
+		if (payload.mediaType !== "movie") {
+			return deferredUpdateMessageResponse();
+		}
+		const isExactSearch = selection.kind === "fallback";
+		return updateMessageResponse({
+			content: "",
+			embeds: [
+				statusEmbed(
+					isExactSearch
+						? "Searching releases"
+						: "Loading movie details",
+					isExactSearch ? "Searching" : "Loading",
+					{
+						description: isExactSearch
+							? "Finding matching releases and checking TorBox availability."
+							: "Retrieving the selected title's details.",
+					},
+				),
+			],
+			components: [],
+		});
 	}
 
 	if (payload.action === "season") {
