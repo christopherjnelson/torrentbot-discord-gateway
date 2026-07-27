@@ -518,11 +518,38 @@ export async function requestDownloadLink(
 	return raw;
 }
 
+/** Extensions that identify playable movie or TV media. */
+const MEDIA_FILE_PATTERN =
+	/\.(?:avi|m2ts|m4v|mkv|mov|mp4|mpeg|mpg|ts|vob|webm|wmv)$/i;
+
+/** Common non-video release files that do not need to be downloaded. */
+const AUXILIARY_FILE_PATTERN =
+	/\.(?:ass|gif|idx|jpe?g|md5|nfo|png|sfv|srt|ssa|sub|txt|url|vtt|webp)$/i;
+
 /**
- * What to download for a ready torrent. A torrent with exactly one file
- * yields that file; anything else yields the whole-torrent zip archive
- * (TorBox's documented archive option), which never requires guessing at
- * individual files.
+ * Video files explicitly labelled as previews or bonus material. Separators
+ * keep words such as "Proof" in a legitimate title from matching partially.
+ */
+const SUPPLEMENTAL_MEDIA_PATTERN =
+	/(?:^|[/\\._\-\s])(?:bonus|extras?|featurettes?|proof|samples?|trailers?)(?:$|[/\\._\-\s])/i;
+
+function isMediaFile(file: TorboxFile): boolean {
+	return MEDIA_FILE_PATTERN.test(file.name.trim());
+}
+
+function isAuxiliaryFile(file: TorboxFile): boolean {
+	const name = file.name.trim();
+	return (
+		AUXILIARY_FILE_PATTERN.test(name) ||
+		(isMediaFile(file) && SUPPLEMENTAL_MEDIA_PATTERN.test(name))
+	);
+}
+
+/**
+ * What to download for a ready torrent. Prefer a single primary movie or TV
+ * file when every companion is recognizable side material; otherwise use the
+ * whole-torrent ZIP so multi-episode and multipart software releases remain
+ * intact.
  */
 export type DownloadTarget =
 	| { kind: "file"; file: TorboxFile }
@@ -531,11 +558,24 @@ export type DownloadTarget =
 /**
  * Deterministic download-target rule:
  * - exactly one downloadable file -> that file;
- * - zero or multiple files -> the whole-torrent zip archive.
+ * - exactly one primary media file plus only auxiliary files -> that media;
+ * - zero files, multiple primary media files, archive parts, or unknown
+ *   companions -> the whole-torrent zip archive.
  */
 export function selectDownloadTarget(torrent: TorboxTorrent): DownloadTarget {
 	if (torrent.files.length === 1) {
 		return { kind: "file", file: torrent.files[0] };
+	}
+	const primaryMedia = torrent.files.filter(
+		(file) => isMediaFile(file) && !isAuxiliaryFile(file),
+	);
+	if (
+		primaryMedia.length === 1 &&
+		torrent.files.every(
+			(file) => file === primaryMedia[0] || isAuxiliaryFile(file),
+		)
+	) {
+		return { kind: "file", file: primaryMedia[0] };
 	}
 	return { kind: "zip" };
 }

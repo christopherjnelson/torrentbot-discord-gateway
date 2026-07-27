@@ -100,8 +100,8 @@ export function formatStatusMessage(
 /**
  * Generate temporary download links for ready torrents, sequentially and
  * best-effort. Uses the same rules as the selection workflow
- * (`selectDownloadTarget`): exactly one file → a direct link; zero or
- * multiple files → a whole-torrent ZIP link.
+ * (`selectDownloadTarget`): a lone primary media file (ignoring recognized
+ * release extras) → a direct link; ambiguous or multipart content → ZIP.
  *
  * Each link request is isolated: a failure (HTTP, parse, non-HTTPS URL,
  * timeout) logs a sanitized classification and leaves that entry's URL

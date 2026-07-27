@@ -518,7 +518,7 @@ describe("component TorBox download flow", () => {
 		expect(dl.query().get("zip_link")).toBeNull();
 	});
 
-	it("returns a zip archive link for a multi-file torrent", async () => {
+	it("returns the primary media file without release extras", async () => {
 		const followups = interceptFollowupCreate();
 		const edits = interceptFollowupEdit();
 		interceptTbCreate(200, tbCreateOk(42, TEST_HASH));
@@ -540,10 +540,11 @@ describe("component TorBox download flow", () => {
 		await waitOnExecutionContext(ctx);
 
 		const final = edits.captured[0].body.content as string;
-		expect(final).toContain("Ready to download (3 files):");
-		expect(final).toContain(`[Download archive (zip)](${TEST_DOWNLOAD_URL})`);
-		expect(dl.query().get("zip_link")).toBe("true");
-		expect(dl.query().get("file_id")).toBeNull();
+		expect(final).toContain("Ready to download:");
+		expect(final).toContain(`[Download file](${TEST_DOWNLOAD_URL})`);
+		expect(final).toContain("Backrooms.2026.1080p.mkv");
+		expect(dl.query().get("file_id")).toBe("0");
+		expect(dl.query().get("zip_link")).toBeNull();
 		expect(followups.captured[0].body.flags).toBe(64);
 	});
 

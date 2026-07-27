@@ -621,12 +621,42 @@ describe("selectDownloadTarget", () => {
 		});
 	});
 
-	it("selects the zip archive for multi-file torrents", () => {
+	it("selects the primary video when the other files are release extras", () => {
 		const target = selectDownloadTarget({
 			...base,
 			files: [
-				{ id: 0, name: "movie.mkv", size: 10 },
-				{ id: 1, name: "sample.mkv", size: 1 },
+				{ id: 0, name: "Movie.2026/movie.mkv", size: 10 },
+				{ id: 1, name: "Movie.2026/Sample/sample.mkv", size: 1 },
+				{ id: 2, name: "Movie.2026/movie.nfo", size: 1 },
+				{ id: 3, name: "Movie.2026/Subs/en.srt", size: 1 },
+				{ id: 4, name: "Movie.2026/poster.jpg", size: 1 },
+			],
+		});
+		expect(target).toEqual({
+			kind: "file",
+			file: { id: 0, name: "Movie.2026/movie.mkv", size: 10 },
+		});
+	});
+
+	it("selects the zip archive for multiple primary videos", () => {
+		const target = selectDownloadTarget({
+			...base,
+			files: [
+				{ id: 0, name: "show.s01e01.mkv", size: 10 },
+				{ id: 1, name: "show.s01e02.mkv", size: 10 },
+				{ id: 2, name: "show.nfo", size: 1 },
+			],
+		});
+		expect(target).toEqual({ kind: "zip" });
+	});
+
+	it("keeps multipart archives intact even when they contain a video extra", () => {
+		const target = selectDownloadTarget({
+			...base,
+			files: [
+				{ id: 0, name: "game.part01.rar", size: 10 },
+				{ id: 1, name: "game.part02.rar", size: 10 },
+				{ id: 2, name: "trailer.mp4", size: 1 },
 			],
 		});
 		expect(target).toEqual({ kind: "zip" });

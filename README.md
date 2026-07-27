@@ -186,9 +186,11 @@ Ready to download:
 Download button
 ```
 
-For a multi-file torrent the bot returns a whole-torrent zip archive link
-instead, since TorBox's `zip_link` requestdl option is officially documented
-and avoids guessing at individual files:
+When a movie or episode release contains one primary video plus recognizable
+extras such as samples, subtitles, NFO/checksum files, or artwork, the bot
+returns the primary video directly. Ambiguous multi-file content—including
+season packs, archive parts, installers, and unknown companion files—uses
+TorBox's whole-torrent zip archive link:
 
 ```
 Added to TorBox.
@@ -214,10 +216,11 @@ The torrent was added, but TorrentBot could not generate a download link yet.
 Use `/status` to check it later.
 ```
 
-All of these responses are **ephemeral**. A single-file torrent uses its direct
-temporary URL; zero or multiple files use TorBox's ZIP URL. The HTTPS URL is
-placed only on the final Discord link button, is never persisted or logged,
-and is temporary (about three hours for starting a download).
+All of these responses are **ephemeral**. A single file or unambiguous primary
+media file uses its direct temporary URL; ambiguous or multipart content uses
+TorBox's ZIP URL. The HTTPS URL is placed only on the final Discord link
+button, is never persisted or logged, and is temporary (about three hours for
+starting a download).
 
 ### TorBox polling
 
@@ -247,7 +250,8 @@ deliberately out of scope for this task.
 `/status` lists the TorBox account's downloads ephemerally (up to 10 entries).
 Ready torrents (`download_finished === true`) include a temporary TorBox
 download link using the same rules as the selection workflow: exactly one file
-→ a direct file link; zero or multiple files → a whole-torrent ZIP link.
+or one primary media file with only recognizable extras → a direct file link;
+ambiguous or multipart content → a whole-torrent ZIP link.
 Processing torrents show status/progress only — no link is requested or
 displayed. Link generation is best-effort enrichment: if a link request fails
 for one torrent, that torrent is still shown without a link and the rest of
@@ -503,11 +507,11 @@ responses never include download URLs, file lists, or server paths.
   Use `/status` to check items still processing. Persistent background
   monitoring (KV, D1, Durable Objects, Queues, Workflows, cron, or external
   databases/n8n) is intentionally out of scope.
-- **Multi-file torrents**: a multi-file torrent always returns a whole-torrent
-  zip archive link. Individual-file selection within a multi-file torrent
-  (largest non-sample media file, sample/NFO/subtitle exclusion) is not
-  implemented, because the documented TorBox `zip_link` archive option is
-  available and avoids guessing at individual files.
+- **Ambiguous multi-file torrents**: season packs with multiple primary videos,
+  multipart archives, installers, and releases with unknown companion files
+  return a whole-torrent ZIP. Automatic direct-file selection is intentionally
+  limited to one primary media file plus recognized samples, subtitles,
+  metadata/checksum files, and artwork.
 - **No TV episode selection**: TV search can choose Complete series, Specials,
   or a numbered season. It does not choose an individual episode.
 - **Temporary links**: generated TorBox download URLs are temporary CDN links
