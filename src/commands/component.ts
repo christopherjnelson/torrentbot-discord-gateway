@@ -228,6 +228,18 @@ export async function handleComponentInteraction(
 				config,
 			),
 		);
+		if (workflowPayload.action === "movie-search") {
+			return updateMessageResponse({
+				content: "",
+				embeds: [
+					statusEmbed("Searching releases", "Searching", {
+						description:
+							"Finding matching releases and checking TorBox availability.",
+					}),
+				],
+				components: [],
+			});
+		}
 		return deferredUpdateMessageResponse();
 	}
 

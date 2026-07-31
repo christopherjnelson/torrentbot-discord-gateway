@@ -200,6 +200,21 @@ describe("guided TMDB media workflow", () => {
 			JSON.stringify(buttonInteraction(card, "Search Releases")),
 			{ COMPONENT_SIGNING_SECRET: TEST_SIGNING_SECRET },
 		);
+		expect(await second.response.json()).toMatchObject({
+			type: 7,
+			data: {
+				content: "",
+				embeds: [
+					{
+						title: "Searching releases",
+						description:
+							"Finding matching releases and checking TorBox availability.",
+						fields: [{ name: "Status", value: "Searching" }],
+					},
+				],
+				components: [],
+			},
+		});
 		await waitOnExecutionContext(second.ctx);
 		expect(searched).toBe("Star Wars 1977");
 		expect(secondEdit.captured[0].body.embeds?.[0]).toMatchObject({
