@@ -1,0 +1,23 @@
+# Secrets and local environment
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+.env
+.env.*
+!.env.example
+
+# Dependencies, generated output, and local tool state
+node_modules/
+coverage/
+dist/
+build/
+.cache/
+.npm/
+.wrangler/
+*.tsbuildinfo
+*.log
+
+# Repository internals and editor state
+.git/
+.vscode/
+.idea/

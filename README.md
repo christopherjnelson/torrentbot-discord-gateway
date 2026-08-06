@@ -5,6 +5,10 @@ Discord guild search for torrents through a self-hosted
 [Prowlarr](https://prowlarr.com) instance and optionally submit magnets to a
 TorBox account — no servers, no n8n workflow required for the core flow.
 
+> [!TIP]
+> Explore the generated [TorrentBot OpenWiki](openwiki/index.md) for linked
+> architecture, workflow, integration, security, testing, and deployment docs.
+
 ```
 Discord (slash commands)
    │  POST /discord/interactions (Ed25519 signed)
