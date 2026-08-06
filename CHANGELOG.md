@@ -7,12 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Add typed `/search general`, `/search movie`, and `/search tv` subcommands.
+- Add TMDB movie and TV disambiguation before querying Prowlarr.
+- Add TV season selection and guided back/cancel controls for media searches.
+
 ### Changed
+- Show loading and progress responses while resolving media selections and
+  searching Prowlarr releases.
 - Prefer the single primary movie or TV file when a release's remaining files
   are recognizable samples, subtitles, metadata, checksums, or artwork; retain
   ZIP downloads for season packs, multipart archives, and ambiguous releases.
+- Expand the automated regression suite from 245 to 315 passing tests.
 
-## [0.1.0-beta] - 2026-07-20
+### Fixed
+- Restore TV season selection after choosing a TMDB series.
+- Preserve the configured Prowlarr URL across the redesigned media workflow.
+- Keep progress presentation visible after movie selection and during release
+  searches.
+
+## [0.1.0-beta.1] - 2026-07-20
 
 ### Added
 - **Slash Commands**:

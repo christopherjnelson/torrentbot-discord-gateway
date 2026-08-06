@@ -13,9 +13,8 @@ DISCORD_GUILD_ID=replace-me
 PROWLARR_API_KEY=replace-me
 # TMDB API read access token - used only for /search movie and /search tv
 TMDB_READ_ACCESS_TOKEN=replace-me
-# Optional local override for the Prowlarr base URL (defaults to the
-# PROWLARR_URL var in wrangler.jsonc)
-# PROWLARR_URL=https://prowlarr.example.com
+# Prowlarr base URL - required for /search and /api/search
+PROWLARR_URL=https://prowlarr.example.com
 # TorBox API key (https://torbox.app/settings) - used for /add and /status
 TORBOX_API_KEY=replace-me
 # Bearer token required for the internal /api/* routes (generate a long random string)

@@ -316,7 +316,7 @@ Fill in `.dev.vars` (never commit it — it is git-ignored):
 | `TORBOX_API_KEY` | secret | TorBox API (`/add`, `/status`, `/api/torrents`) |
 | `INTERNAL_API_TOKEN` | secret | Bearer token for `/api/*` (generate a long random string) |
 | `COMPONENT_SIGNING_SECRET` | secret | HMAC-SHA-256 signing for Discord component interactions (generate with `openssl rand -hex 32`) |
-| `PROWLARR_URL` | var | Prowlarr base URL (set in `wrangler.jsonc`; `.dev.vars` overrides locally) |
+| `PROWLARR_URL` | secret | Prowlarr base URL used by `/search` and `/api/search` |
 | `TORBOX_ALLOWED_GUILD_IDS` | secret | Comma-separated Discord guild (server) IDs whose members may run `/search`, `/add`, `/status`, and the search-result selection flow (each entry must be a snowflake-style decimal string; missing/empty/malformed denies all Discord TorBox access). Treated as a secret so real guild IDs stay out of tracked files |
 | `UPSTREAM_TIMEOUT_MS` | var | Optional upstream timeout override (default `10000`) |
 | `TORBOX_POLL_INTERVAL_MS` | var | Optional delay between TorBox readiness polls after a selection (default `2500`, range 250–10000) |
@@ -329,6 +329,7 @@ Secrets (values never appear in the repo or in logs):
 ```sh
 npx wrangler secret put DISCORD_PUBLIC_KEY
 npx wrangler secret put PROWLARR_API_KEY
+npx wrangler secret put PROWLARR_URL
 npx wrangler secret put TMDB_READ_ACCESS_TOKEN
 npx wrangler secret put TORBOX_API_KEY
 npx wrangler secret put INTERNAL_API_TOKEN
@@ -349,15 +350,15 @@ comma-separated value (e.g. `123456789012345678,987654321098765432`). Each
 entry must be a snowflake-style decimal string; missing/empty/malformed
 configuration denies all Discord TorBox access. Direct messages are not supported.
 
-Non-secret vars live in `wrangler.jsonc` (`PROWLARR_URL`,
-`UPSTREAM_TIMEOUT_MS`, `TORBOX_POLL_INTERVAL_MS`, `TORBOX_POLL_MAX_ATTEMPTS`)
-and can be edited there or in the Cloudflare dashboard.
+Non-secret vars live in `wrangler.jsonc` (`UPSTREAM_TIMEOUT_MS`,
+`TORBOX_POLL_INTERVAL_MS`, `TORBOX_POLL_MAX_ATTEMPTS`) and can be edited there
+or in the Cloudflare dashboard.
 
 ## Deployment Checklist
 
 1. Create the Discord application/guild, Prowlarr instance, and TorBox account.
 2. Add real IDs and API keys to `.dev.vars` for local development.
-3. Add production secrets to Cloudflare (`wrangler secret put …`) and verify the `PROWLARR_URL` in `wrangler.jsonc`.
+3. Add every production secret to Cloudflare (`wrangler secret put …`), including `PROWLARR_URL`.
 4. Run `npm run discord:register` to register slash commands in your Discord guild.
 5. Deploy the worker with `npm run deploy`.
 6. Enter the Interactions Endpoint URL in the Discord Developer Portal.
@@ -392,7 +393,8 @@ All development and verification scripts are managed via npm:
 | Command | Description |
 | --- | --- |
 | `npm run dev` | Starts the local Wrangler development server for real-time testing. |
-| `npm test` | Runs the full Vitest test suite inside a simulated Cloudflare Workers environment. |
+| `npm test` | Starts Vitest in watch mode inside a simulated Cloudflare Workers environment. |
+| `npm test -- --run` | Runs the full Vitest test suite once and exits. |
 | `npm run typecheck` | Runs strict TypeScript compiler checks on both `src/` and `test/` codebases. |
 | `npm run cf-typegen` | Regenerates `worker-configuration.d.ts` typescript bindings from `wrangler.jsonc`. |
 | `npm run deploy` | Deploys the application directly to Cloudflare Workers. |
@@ -402,7 +404,13 @@ All development and verification scripts are managed via npm:
 
 ### Testing details
 
-`npm test` runs Vitest inside a real Worker runtime (`@cloudflare/vitest-pool-workers`). Outbound HTTP requests are fully mocked via `fetchMock`, ensuring tests never call Discord, TMDB, Prowlarr, or TorBox APIs directly. Signed Discord request payloads are produced deterministically using a generated Ed25519 key pair, preserving complete signature verification in test assertions.
+`npm test` starts Vitest in watch mode; use `npm test -- --run` for one-shot
+verification. Tests run inside a real Worker runtime
+(`@cloudflare/vitest-pool-workers`). Outbound HTTP requests are fully mocked
+via `fetchMock`, ensuring tests never call Discord, TMDB, Prowlarr, or TorBox
+APIs directly. Signed Discord request payloads are produced deterministically
+using a generated Ed25519 key pair, preserving complete signature verification
+in test assertions.
 
 The test suite covers health checks, signature validation, typed command
 routing, TMDB normalization/disambiguation, deferred responses, upstream
@@ -475,8 +483,8 @@ responses never include download URLs, file lists, or server paths.
   from Discord or the `DISCORD_PUBLIC_KEY` is wrong.
 - **Commands don't appear in Discord**: re-run `npm run discord:register`
   and check `DISCORD_APPLICATION_ID`, `DISCORD_GUILD_ID`, `DISCORD_BOT_TOKEN`.
-- **"Search is not configured"**: set `PROWLARR_URL` (var) and
-  `PROWLARR_API_KEY` (secret).
+- **"Search is not configured"**: set `PROWLARR_URL` and `PROWLARR_API_KEY`
+  as Worker secrets (or in the ignored `.dev.vars` file for local development).
 - **"Movie and TV lookup is not configured"**: set
   `TMDB_READ_ACCESS_TOKEN` as a Worker secret and ensure
   `COMPONENT_SIGNING_SECRET` is configured. Local development may add

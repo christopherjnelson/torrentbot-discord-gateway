@@ -10,9 +10,8 @@
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
-	// Non-secret configuration. PROWLARR_URL is the base URL of the Prowlarr
-	// instance backing /search and /api/search. TORBOX_POLL_* bound the
-	// readiness check after adding a torrent
+	// Non-secret configuration. TORBOX_POLL_* bound the readiness check after
+	// adding a torrent
 	// (maxAttempts x intervalMs ~= 15-20s total).
 	//
 	// TORBOX_ALLOWED_GUILD_IDS is intentionally NOT a var here: it is a
@@ -26,6 +25,8 @@
 	},
 	// Secret bindings the Worker reads at runtime. Set values with
 	// `wrangler secret put <NAME>` (production) or in `.dev.vars` (local dev).
+	// PROWLARR_URL is the base URL of the Prowlarr instance backing /search and
+	// /api/search. It is kept as a secret to avoid exposing private hostnames.
 	// TMDB_READ_ACCESS_TOKEN is sent only as a Bearer header for movie/TV
 	// search and details; /search general never reads or sends it.
 	// TORBOX_ALLOWED_GUILD_IDS is an optional comma-separated list of Discord
