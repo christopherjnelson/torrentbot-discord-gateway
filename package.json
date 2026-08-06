@@ -8,9 +8,6 @@
     "start": "wrangler dev",
     "test": "vitest",
     "typecheck": "tsc --noEmit && tsc --noEmit -p test/tsconfig.json",
-    "openwiki:init": "openwiki code --init --language en",
-    "openwiki:update": "openwiki code --update --language en",
-    "openwiki:visualize": "openwiki visualize openwiki",
     "discord:register": "node --env-file-if-exists=.dev.vars scripts/register-commands.mjs",
     "discord:unregister": "node --env-file-if-exists=.dev.vars scripts/register-commands.mjs --unregister",
     "cf-typegen": "wrangler types"
@@ -18,7 +15,6 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.12.4",
     "@types/node": "^26.1.1",
-    "openwiki": "0.3.1",
     "typescript": "^5.5.2",
     "vitest": "~3.2.0",
     "wrangler": "^4.112.0"
